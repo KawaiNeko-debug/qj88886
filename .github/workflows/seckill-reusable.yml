@@ -43,8 +43,6 @@ on:
         required: false
       JLC_SECRET_KEY_VALUE:
         required: false
-      JLC_USER_AGENT:
-        required: false
       JLC_USE_HTTP2:
         required: false
       JLC_ACCEPT_LANGUAGE:
@@ -138,7 +136,6 @@ jobs:
       TOKEN_ALTERNATIVE_KEYS: ${{ secrets.TOKEN_ALTERNATIVE_KEYS }}
       JLC_CLIENT_TYPE: ${{ secrets.JLC_CLIENT_TYPE }}
       JLC_SECRET_KEY_VALUE: ${{ secrets.JLC_SECRET_KEY_VALUE }}
-      JLC_USER_AGENT: ${{ secrets.JLC_USER_AGENT }}
       JLC_USE_HTTP2: ${{ secrets.JLC_USE_HTTP2 }}
       JLC_ACCEPT_LANGUAGE: ${{ secrets.JLC_ACCEPT_LANGUAGE }}
       BROWSER_VIEWPORT_WIDTH: ${{ secrets.BROWSER_VIEWPORT_WIDTH }}

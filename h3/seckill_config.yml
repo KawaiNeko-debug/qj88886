@@ -18,19 +18,19 @@ batches:
   batch1:
     group_number: 1
     group_name: "seckill-batch1"
-    target_keyword: "铝合金"
+    target_keyword: "游标卡尺"
     schedule_mode: "fixed"
     fixed_lead_ms: 500
   batch2:
     group_number: 2
     group_name: "seckill-batch2"
-    target_keyword: "握力器"
+    target_keyword: "游标卡尺"
     schedule_mode: "fixed"
     fixed_lead_ms: 500
   batch3:
     group_number: 3
     group_name: "seckill-batch3"
-    target_keyword: "鼠标"
+    target_keyword: "游标卡尺"
     schedule_mode: "fixed"
     fixed_lead_ms: 500
   batch4:
@@ -42,24 +42,30 @@ batches:
   batch5:
     group_number: 5
     group_name: "seckill-batch5"
-    target_keyword: "SMT"
+    target_keyword: "U盘"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch6:
     group_number: 6
     group_name: "seckill-batch6"
-    target_keyword: "纸盒"
+    target_keyword: "U盘"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch7:
     group_number: 7
     group_name: "seckill-batch7"
-    target_keyword: "FA商城"
+    target_keyword: "鼠标"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch8:
     group_number: 8
     group_name: "seckill-batch8"
-    target_keyword: "面板"
+    target_keyword: "鼠标"
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch9:
+    group_number: 9
+    group_name: "seckill-batch9"
+    target_keyword: "鼠标"
     schedule_mode: "dynamic"
     calibration_enabled: true

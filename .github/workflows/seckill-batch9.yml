@@ -1,4 +1,4 @@
-name: seckill-batch8
+name: seckill-batch9
 
 on:
   schedule:
@@ -13,9 +13,9 @@ jobs:
   run:
     uses: ./.github/workflows/seckill-reusable.yml
     with:
-      batch_number: 8
+      batch_number: 9
     secrets:
-      ACCOUNTS_BATCH: ${{ secrets.ACCOUNTS_BATCH8 }}
+      ACCOUNTS_BATCH: ${{ secrets.ACCOUNTS_BATCH9 }}
       PASSPORT_URL: ${{ secrets.PASSPORT_URL }}
       SLIDER_ID: ${{ secrets.SLIDER_ID }}
       WRAPPER_ID: ${{ secrets.WRAPPER_ID }}
