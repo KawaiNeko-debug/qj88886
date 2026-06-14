@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+
+results/
+artifacts/
+merged/
+logs/
+*.log
+*.xlsx
+result.json
+accounts.json
+accounts*.json
+*.tmp
+tmp-seckill-test/
+__pycache__/
+*.pyc

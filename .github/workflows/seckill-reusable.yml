@@ -1,0 +1,284 @@
+name: seckill-reusable
+
+on:
+  workflow_call:
+    inputs:
+      batch_number:
+        required: true
+        type: number
+    secrets:
+      ACCOUNTS_BATCH:
+        required: true
+      PASSPORT_URL:
+        required: true
+      SLIDER_ID:
+        required: true
+      WRAPPER_ID:
+        required: true
+      BASE_URL:
+        required: false
+      SECKILL_BASE_URL:
+        required: false
+      SECKILL_CATEGORY_ACCESS_ID:
+        required: true
+      SECKILL_REFERER:
+        required: false
+      REFERER:
+        required: false
+      JLC_REFERER:
+        required: false
+      HEADER_CLIENT_TYPE:
+        required: false
+      HEADER_ACCESS_TOKEN:
+        required: false
+      HEADER_ACCESS_TOKEN_FALLBACKS:
+        required: false
+      HEADER_SECRET_KEY:
+        required: false
+      TOKEN_KEY:
+        required: false
+      TOKEN_ALTERNATIVE_KEYS:
+        required: false
+      JLC_CLIENT_TYPE:
+        required: false
+      JLC_SECRET_KEY_VALUE:
+        required: false
+      JLC_USER_AGENT:
+        required: false
+      JLC_USE_HTTP2:
+        required: false
+      JLC_ACCEPT_LANGUAGE:
+        required: false
+      BROWSER_VIEWPORT_WIDTH:
+        required: false
+      BROWSER_VIEWPORT_HEIGHT:
+        required: false
+      BROWSER_DEVICE_SCALE_FACTOR:
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.prepare.outputs.matrix }}
+      count: ${{ steps.prepare.outputs.count }}
+    env:
+      ACCOUNTS: ${{ secrets.ACCOUNTS_BATCH }}
+    steps:
+      - id: prepare
+        name: Build 20-account matrix
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import random
+
+          lines = [line.strip() for line in os.environ.get("ACCOUNTS", "").splitlines() if line.strip()]
+          if len(lines) != 20:
+              print(f"::error title=ACCOUNTS_BATCH must contain 20 accounts::found {len(lines)}")
+              raise SystemExit(1)
+
+          invalid = []
+          for index, line in enumerate(lines, start=1):
+              if "----" in line:
+                  username, password = line.split("----", 1)
+              elif "," in line:
+                  username, password = line.split(",", 1)
+              else:
+                  invalid.append(f"line {index}: missing comma or ----")
+                  continue
+              if not username.strip() or not password.strip():
+                  invalid.append(f"line {index}: empty username or password")
+          if invalid:
+              for message in invalid:
+                  print(f"::error title=invalid account line::{message}")
+              raise SystemExit(1)
+
+          indexes = list(range(1, 21))
+          random.shuffle(indexes)
+          matrix = {"include": [{"account_index": idx, "execution_order": order} for order, idx in enumerate(indexes, 1)]}
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"matrix={json.dumps(matrix)}\n")
+              output.write("count=20\n")
+          print("execution order: " + ", ".join(map(str, indexes)))
+          PY
+
+  run:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      ACCOUNTS: ${{ secrets.ACCOUNTS_BATCH }}
+      BASE_URL: ${{ secrets.BASE_URL }}
+      SECKILL_BASE_URL: ${{ secrets.SECKILL_BASE_URL }}
+      SECKILL_CATEGORY_ACCESS_ID: ${{ secrets.SECKILL_CATEGORY_ACCESS_ID }}
+      SECKILL_REFERER: ${{ secrets.SECKILL_REFERER }}
+      PASSPORT_URL: ${{ secrets.PASSPORT_URL }}
+      REFERER: ${{ secrets.REFERER }}
+      JLC_REFERER: ${{ secrets.JLC_REFERER }}
+      SLIDER_ID: ${{ secrets.SLIDER_ID }}
+      WRAPPER_ID: ${{ secrets.WRAPPER_ID }}
+      HEADER_CLIENT_TYPE: ${{ secrets.HEADER_CLIENT_TYPE }}
+      HEADER_ACCESS_TOKEN: ${{ secrets.HEADER_ACCESS_TOKEN }}
+      HEADER_ACCESS_TOKEN_FALLBACKS: ${{ secrets.HEADER_ACCESS_TOKEN_FALLBACKS }}
+      HEADER_SECRET_KEY: ${{ secrets.HEADER_SECRET_KEY }}
+      TOKEN_KEY: ${{ secrets.TOKEN_KEY }}
+      TOKEN_ALTERNATIVE_KEYS: ${{ secrets.TOKEN_ALTERNATIVE_KEYS }}
+      JLC_CLIENT_TYPE: ${{ secrets.JLC_CLIENT_TYPE }}
+      JLC_SECRET_KEY_VALUE: ${{ secrets.JLC_SECRET_KEY_VALUE }}
+      JLC_USER_AGENT: ${{ secrets.JLC_USER_AGENT }}
+      JLC_USE_HTTP2: ${{ secrets.JLC_USE_HTTP2 }}
+      JLC_ACCEPT_LANGUAGE: ${{ secrets.JLC_ACCEPT_LANGUAGE }}
+      BROWSER_VIEWPORT_WIDTH: ${{ secrets.BROWSER_VIEWPORT_WIDTH }}
+      BROWSER_VIEWPORT_HEIGHT: ${{ secrets.BROWSER_VIEWPORT_HEIGHT }}
+      BROWSER_DEVICE_SCALE_FACTOR: ${{ secrets.BROWSER_DEVICE_SCALE_FACTOR }}
+      GROUP_NUMBER: ${{ inputs.batch_number }}
+      GROUP_NAME: seckill-batch${{ inputs.batch_number }}
+      ACCOUNT_INDEX: ${{ matrix.account_index }}
+      EXECUTION_ORDER: ${{ matrix.execution_order }}
+      TOTAL_ACCOUNTS: "20"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r h3/requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Select account
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+
+          lines = [line.strip() for line in os.environ["ACCOUNTS"].splitlines() if line.strip()]
+          index = int(os.environ["ACCOUNT_INDEX"])
+          line = lines[index - 1]
+          if "----" in line:
+              username, password = line.split("----", 1)
+          else:
+              username, password = line.split(",", 1)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write("ACCOUNT_USERNAME<<__ACCOUNT_USERNAME__\n")
+              env_file.write(username.strip() + "\n")
+              env_file.write("__ACCOUNT_USERNAME__\n")
+              env_file.write("ACCOUNT_PASSWORD<<__ACCOUNT_PASSWORD__\n")
+              env_file.write(password.strip() + "\n")
+              env_file.write("__ACCOUNT_PASSWORD__\n")
+          print(f"selected account {index}; execution order {os.environ.get('EXECUTION_ORDER')}")
+          PY
+
+      - id: seckill
+        name: Run seckill
+        continue-on-error: true
+        env:
+          RESULT_JSON_PATH: result.json
+        run: python h3/seckill.py --batch "${GROUP_NUMBER}" --username "$ACCOUNT_USERNAME" --password "$ACCOUNT_PASSWORD" --account-index "$ACCOUNT_INDEX" --total-accounts "$TOTAL_ACCOUNTS"
+
+      - name: Ensure result
+        if: always()
+        env:
+          SECKILL_STEP_OUTCOME: ${{ steps.seckill.outcome }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          if os.path.exists("result.json"):
+              raise SystemExit(0)
+
+          group_number = int(os.getenv("GROUP_NUMBER", "0") or 0)
+          account_index = int(os.getenv("ACCOUNT_INDEX", "0") or 0)
+          reason = f"seckill script did not create result.json; step={os.getenv('SECKILL_STEP_OUTCOME', 'unknown')}"
+          payload = {
+              "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
+              "batch_name": f"seckill-batch{group_number}",
+              "group_name": f"seckill-batch{group_number}",
+              "group_number": group_number,
+              "total_accounts": 1,
+              "results": [{
+                  "account_index": account_index,
+                  "execution_order": int(os.getenv("EXECUTION_ORDER", "0") or 0),
+                  "username": f"账号{account_index}",
+                  "group_name": f"seckill-batch{group_number}",
+                  "group_number": group_number,
+                  "group_position": f"{group_number}组账号{account_index}",
+                  "sign_success": False,
+                  "sign_status": "秒杀脚本异常",
+                  "has_reward": False,
+                  "password_error": False,
+                  "risk_controlled": False,
+                  "retry_count": 0,
+                  "is_final_retry": False,
+                  "detail_reason": reason,
+                  "sign_time": "",
+                  "sign_ip": "",
+                  "activity_records": {"seckill": []},
+              }],
+          }
+          with open("result.json", "w", encoding="utf-8") as file:
+              json.dump(payload, file, ensure_ascii=False, indent=2)
+          print(f"::error title=missing seckill result::{reason}")
+          PY
+
+      - name: Upload account result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: initial-result-${{ matrix.account_index }}
+          path: result.json
+          if-no-files-found: error
+          retention-days: 2
+
+  merge:
+    needs: [prepare, run]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download account results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: initial-result-*
+          path: artifacts
+
+      - name: Merge account results
+        run: python h3/seckill_merge_results.py artifacts merged/result.json
+
+      - name: Upload batch result
+        uses: actions/upload-artifact@v4
+        with:
+          name: seckill-batch${{ inputs.batch_number }}-result
+          path: merged/result.json
+          if-no-files-found: error
+          retention-days: 7

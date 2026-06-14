@@ -1,0 +1,63 @@
+name: seckill-summary
+
+on:
+  schedule:
+    - cron: "5 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  summary:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r h3/requirements.txt
+
+      - name: Fetch batch artifacts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python h3/fetch_seckill_results.py results
+
+      - name: Build and send summary
+        if: always()
+        env:
+          ACCOUNTS_BATCH1: ${{ secrets.ACCOUNTS_BATCH1 }}
+          ACCOUNTS_BATCH2: ${{ secrets.ACCOUNTS_BATCH2 }}
+          ACCOUNTS_BATCH3: ${{ secrets.ACCOUNTS_BATCH3 }}
+          ACCOUNTS_BATCH4: ${{ secrets.ACCOUNTS_BATCH4 }}
+          ACCOUNTS_BATCH5: ${{ secrets.ACCOUNTS_BATCH5 }}
+          ACCOUNTS_BATCH6: ${{ secrets.ACCOUNTS_BATCH6 }}
+          ACCOUNTS_BATCH7: ${{ secrets.ACCOUNTS_BATCH7 }}
+          ACCOUNTS_BATCH8: ${{ secrets.ACCOUNTS_BATCH8 }}
+          NOTIFY_CHANNELS: telegram
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python h3/seckill_report.py results
+
+      - name: Upload summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seckill-summary-result
+          path: |
+            results/**
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,65 @@
+defaults:
+  source: 4
+  login_at: "09:50:00"
+  seckill_at: "10:00:00"
+  hard_stop_time: "10:01:00"
+  prewarm_concurrency: 30
+  burst_concurrency: 120
+  burst_interval_ms: 10
+  prewarm_server_arrival_lead_ms: 10
+  active_window_ms: 3000
+  fixed_lead_ms: 500
+  calibration_interval_ms: 1500
+  calibration_sample_size: 15
+  list_path: "/api/activity/seckill/ns/getSeckillGoods"
+  buy_path: "/api/activity/seckill/exchangeSeckillGoods"
+
+batches:
+  batch1:
+    group_number: 1
+    group_name: "seckill-batch1"
+    target_keyword: "铝合金"
+    schedule_mode: "fixed"
+    fixed_lead_ms: 500
+  batch2:
+    group_number: 2
+    group_name: "seckill-batch2"
+    target_keyword: "握力器"
+    schedule_mode: "fixed"
+    fixed_lead_ms: 500
+  batch3:
+    group_number: 3
+    group_name: "seckill-batch3"
+    target_keyword: "鼠标"
+    schedule_mode: "fixed"
+    fixed_lead_ms: 500
+  batch4:
+    group_number: 4
+    group_name: "seckill-batch4"
+    target_keyword: "U盘"
+    schedule_mode: "fixed"
+    fixed_lead_ms: 500
+  batch5:
+    group_number: 5
+    group_name: "seckill-batch5"
+    target_keyword: "SMT"
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch6:
+    group_number: 6
+    group_name: "seckill-batch6"
+    target_keyword: "纸盒"
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch7:
+    group_number: 7
+    group_name: "seckill-batch7"
+    target_keyword: "FA商城"
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch8:
+    group_number: 8
+    group_name: "seckill-batch8"
+    target_keyword: "面板"
+    schedule_mode: "dynamic"
+    calibration_enabled: true
