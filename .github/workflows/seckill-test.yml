@@ -80,21 +80,23 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TEST_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           TEST_WORKFLOW_RESULT: ${{ needs.run.result }}
         shell: bash
         run: |
           python - <<'PY'
           import glob
+          import html
           import json
           import os
           import urllib.parse
           import urllib.request
+          import zipfile
           from datetime import datetime
           from zoneinfo import ZoneInfo
 
           local_tz = ZoneInfo("Asia/Shanghai")
           result_files = glob.glob("test-results/**/*.json", recursive=True)
+          xlsx_path = datetime.now(local_tz).strftime("%Y-%m-%d测试秒杀.xlsx")
 
           def truthy(value):
               if value is True:
@@ -110,16 +112,178 @@ jobs:
                   return records[0]
               return {}
 
+          def cell_text(value, limit=1200):
+              if value is None:
+                  return ""
+              if isinstance(value, (dict, list)):
+                  text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+              else:
+                  text = str(value)
+              text = " ".join(text.split())
+              if len(text) <= limit:
+                  return text
+              return text[:limit] + f"...(truncated,len={len(text)})"
+
+          def col_name(index):
+              name = ""
+              while index:
+                  index, rem = divmod(index - 1, 26)
+                  name = chr(65 + rem) + name
+              return name
+
+          def sheet_xml(rows):
+              xml_rows = []
+              for row_index, row in enumerate(rows, start=1):
+                  cells = []
+                  for col_index, value in enumerate(row, start=1):
+                      ref = f"{col_name(col_index)}{row_index}"
+                      text = html.escape(cell_text(value, 32000))
+                      cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{text}</t></is></c>')
+                  xml_rows.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+              return (
+                  '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                  '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                  f'<sheetData>{"".join(xml_rows)}</sheetData>'
+                  '</worksheet>'
+              )
+
+          def write_xlsx(path, rows):
+              summary_rows = [[
+                  "序号", "账号", "状态", "原因", "商品", "SKU", "商品ID",
+                  "发包数", "RTT中位数(ms)", "服务器时差中位数(ms)", "成功发送时间", "成功返回时间"
+              ]]
+              stats_rows = [["序号", "账号", "商品", "发包数", "返回次数", "返回摘要", "首次返回", "成功返回"]]
+
+              for index, row in enumerate(rows, start=1):
+                  rec = seckill_record(row)
+                  success = truthy(row.get("sign_success")) or truthy(rec.get("success"))
+                  summary_rows.append([
+                      index,
+                      row.get("group_position") or row.get("account_index") or "",
+                      "秒杀成功" if success else row.get("sign_status") or "秒杀失败",
+                      row.get("detail_reason") or rec.get("last_response_message") or "",
+                      rec.get("title") or "",
+                      rec.get("sku_code") or "",
+                      rec.get("goods_detail_access_id") or "",
+                      rec.get("attempts_sent") or 0,
+                      rec.get("median_rtt_ms") or "",
+                      rec.get("median_server_delta_ms") or "",
+                      rec.get("success_sent_at") or "",
+                      rec.get("success_received_at") or "",
+                  ])
+
+                  counts = rec.get("response_counts")
+                  if isinstance(counts, dict):
+                      first = True
+                      for summary, count in sorted(counts.items(), key=lambda item: (-int(item[1] or 0), item[0])):
+                          stats_rows.append([
+                              len(stats_rows),
+                              row.get("group_position") or row.get("account_index") or "",
+                              rec.get("title") or "",
+                              rec.get("attempts_sent") or 0,
+                              count,
+                              summary,
+                              rec.get("first_response") if first else "",
+                              rec.get("success_response") if first else "",
+                          ])
+                          first = False
+
+              content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+              <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+              <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+              <Default Extension="xml" ContentType="application/xml"/>
+              <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+              <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+              <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+              <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+              </Types>"""
+              rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+              <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+              </Relationships>"""
+              workbook = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+              <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+              <sheets>
+              <sheet name="测试汇总" sheetId="1" r:id="rId1"/>
+              <sheet name="返回统计" sheetId="2" r:id="rId2"/>
+              </sheets>
+              </workbook>"""
+              workbook_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+              <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+              <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+              <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+              <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+              </Relationships>"""
+              styles = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+              <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+              <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+              <borders count="1"><border/></borders>
+              <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+              <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+              </styleSheet>"""
+              with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+                  archive.writestr("[Content_Types].xml", content_types)
+                  archive.writestr("_rels/.rels", rels)
+                  archive.writestr("xl/workbook.xml", workbook)
+                  archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+                  archive.writestr("xl/styles.xml", styles)
+                  archive.writestr("xl/worksheets/sheet1.xml", sheet_xml(summary_rows))
+                  archive.writestr("xl/worksheets/sheet2.xml", sheet_xml(stats_rows))
+
+          def send_telegram_message(token, chat_id, text):
+              data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
+              req = urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/sendMessage",
+                  data=data,
+                  headers={"Content-Type": "application/x-www-form-urlencoded"},
+              )
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  body = response.read().decode("utf-8", errors="replace")
+                  print(f"[telegram] message status={response.status} body={body[:300]}")
+
+          def send_telegram_document(token, chat_id, path):
+              boundary = "----seckill-test-boundary"
+              filename = os.path.basename(path)
+              with open(path, "rb") as file:
+                  content = file.read()
+              body = b"".join([
+                  f"--{boundary}\r\n".encode(),
+                  b'Content-Disposition: form-data; name="chat_id"\r\n\r\n',
+                  chat_id.encode(),
+                  b"\r\n",
+                  f"--{boundary}\r\n".encode(),
+                  f'Content-Disposition: form-data; name="document"; filename="{filename}"\r\n'.encode(),
+                  b"Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n",
+                  content,
+                  b"\r\n",
+                  f"--{boundary}--\r\n".encode(),
+              ])
+              req = urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/sendDocument",
+                  data=body,
+                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  body_text = response.read().decode("utf-8", errors="replace")
+                  print(f"[telegram] document status={response.status} body={body_text[:300]}")
+
+          rows = []
           lines = [
               f"{datetime.now(local_tz).strftime('%Y-%m-%d %H:%M:%S')} 测试秒杀总结",
               f"Workflow: {os.getenv('TEST_WORKFLOW_RESULT', 'unknown')}",
-              f"Run: {os.getenv('TEST_RUN_URL', '')}",
           ]
 
           if not result_files:
               lines.append("结果: 未找到 seckill-batch10-result artifact，可能测试流程未跑到合并阶段。")
+              rows.append({
+                  "account_index": "",
+                  "group_position": "测试汇总",
+                  "sign_status": "未找到结果",
+                  "detail_reason": "未找到 seckill-batch10-result artifact，可能测试流程未跑到合并阶段。",
+                  "activity_records": {"seckill": [{}]},
+              })
           else:
-              rows = []
               for path in result_files:
                   try:
                       with open(path, "r", encoding="utf-8") as file:
@@ -174,6 +338,9 @@ jobs:
                   for key, count in sorted(response_counts.items(), key=lambda item: (-item[1], item[0]))[:8]:
                       lines.append(f"- {count}x {key[:220]}")
 
+          write_xlsx(xlsx_path, rows)
+          lines.append(f"XLSX: {xlsx_path}")
+
           text = "\n".join(lines)
           print(text)
 
@@ -183,17 +350,20 @@ jobs:
               print("[telegram] skipped: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID empty")
               raise SystemExit(0)
 
-          data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
-          req = urllib.request.Request(
-              f"https://api.telegram.org/bot{token}/sendMessage",
-              data=data,
-              headers={"Content-Type": "application/x-www-form-urlencoded"},
-          )
           try:
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  body = response.read().decode("utf-8", errors="replace")
-                  print(f"[telegram] status={response.status} body={body[:300]}")
+              send_telegram_message(token, chat_id, text)
+              if os.path.exists(xlsx_path):
+                  send_telegram_document(token, chat_id, xlsx_path)
           except Exception as exc:
               print(f"[telegram] failed: {type(exc).__name__}: {exc}")
               raise SystemExit(1)
           PY
+
+      - name: Upload test summary xlsx
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seckill-test-summary-xlsx
+          path: "*测试秒杀.xlsx"
+          if-no-files-found: warn
+          retention-days: 7

@@ -13,7 +13,7 @@ import threading
 import re
 from email.message import EmailMessage
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from playwright.sync_api import sync_playwright, Page, TimeoutError as PlaywrightTimeoutError
 from fake_useragent import UserAgent
 from dotenv import load_dotenv
@@ -63,6 +63,7 @@ WRAPPER_ID = os.getenv('WRAPPER_ID')
 HEADER_CLIENT_TYPE = os.getenv('HEADER_CLIENT_TYPE')
 HEADER_ACCESS_TOKEN = os.getenv('HEADER_ACCESS_TOKEN')
 HEADER_SECRET_KEY = os.getenv('HEADER_SECRET_KEY', '')
+HEADER_XSRF_TOKEN = env_first("HEADER_XSRF_TOKEN", "XSRF_HEADER", default="x-xsrf-token")
 
 TOKEN_KEY = os.getenv('TOKEN_KEY')
 TOKEN_ALTERNATIVE_KEYS = [k.strip() for k in os.getenv('TOKEN_ALTERNATIVE_KEYS', '').split(',') if k.strip()]
@@ -129,6 +130,10 @@ if missing_vars:
 parsed_base = urlparse(BASE_URL)
 HOST = parsed_base.netloc
 URL_PATTERN = f"**/{HOST}/**"
+parsed_passport = urlparse(PASSPORT_URL)
+PASSPORT_ORIGIN = f"{parsed_passport.scheme}://{parsed_passport.netloc}" if parsed_passport.scheme and parsed_passport.netloc else ""
+PASSPORT_QUERY = parse_qs(parsed_passport.query)
+JLC_CAS_APP_ID = env_first("JLC_CAS_APP_ID", "CAS_APP_ID", default=(PASSPORT_QUERY.get("appId") or ["JLC_MOBILE_APP"])[0])
 
 # ==============================================================================
 # 小工具函数
@@ -477,6 +482,124 @@ def wait_token_from_requests(token_holder, timeout=8):
         if token:
             return token
         time.sleep(0.2)
+    return None
+
+def bind_m_site_access_token(page: Page, token_holder: dict, secretkey_holder: dict, xsrf_holder: dict, account_index: int):
+    if not truthy(os.getenv("JLC_BIND_TOKEN_ENABLED", "true")):
+        return None
+    secretkey = JLC_SECRET_KEY_VALUE or secretkey_holder.get("value") or ""
+    params = {
+        "passportOrigin": PASSPORT_ORIGIN,
+        "baseUrl": BASE_URL.rstrip("/"),
+        "appId": JLC_CAS_APP_ID,
+        "tokenKey": TOKEN_KEY or "AccessToken",
+        "tokenAlternativeKeys": TOKEN_ALTERNATIVE_KEYS,
+        "headerAccessToken": HEADER_ACCESS_TOKEN,
+        "headerSecretKey": HEADER_SECRET_KEY,
+        "headerXsrfToken": HEADER_XSRF_TOKEN,
+        "secretkey": secretkey,
+        "xsrfToken": xsrf_holder.get("value") or "",
+    }
+    script = """
+    async (params) => {
+        const out = {ok: false, step: "start"};
+        const readStorage = (keys) => {
+            for (const key of keys) {
+                if (!key) continue;
+                try {
+                    const value = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
+                    if (value) return value;
+                } catch (_) {}
+            }
+            return "";
+        };
+        const readCookie = (names) => {
+            const parts = String(document.cookie || "").split(";").map(v => v.trim());
+            for (const name of names) {
+                if (!name) continue;
+                const prefix = name + "=";
+                const hit = parts.find(v => v.startsWith(prefix));
+                if (hit) return decodeURIComponent(hit.slice(prefix.length));
+            }
+            return "";
+        };
+        const jsonOrText = async (response) => {
+            const text = await response.text();
+            try { return JSON.parse(text); } catch (_) { return {success: false, code: response.status, message: text.slice(0, 500)}; }
+        };
+
+        if (!params.passportOrigin || !params.baseUrl) {
+            return {...out, step: "config", message: "missing passportOrigin/baseUrl"};
+        }
+
+        out.step = "check-login";
+        const checkResponse = await fetch(`${params.passportOrigin}/api/cas/sso/check-login`, {
+            method: "POST",
+            credentials: "include",
+            headers: {"content-type": "application/json;charset=UTF-8"},
+            body: JSON.stringify({appId: params.appId || "JLC_MOBILE_APP"})
+        });
+        const checkJson = await jsonOrText(checkResponse);
+        out.checkStatus = checkResponse.status;
+        out.checkCode = checkJson && checkJson.code;
+        out.checkSuccess = !!(checkJson && checkJson.success);
+        const code = checkJson && checkJson.data && (checkJson.data.code || checkJson.data.authCode);
+        if (!code) {
+            return {...out, message: checkJson && (checkJson.message || checkJson.errorMessage || JSON.stringify(checkJson).slice(0, 300))};
+        }
+
+        out.step = "login-by-code";
+        const form = new FormData();
+        form.append("code", code);
+        const headers = {};
+        if (params.headerAccessToken) headers[params.headerAccessToken] = "NONE";
+        if (params.headerSecretKey && params.secretkey) headers[params.headerSecretKey] = params.secretkey;
+        const xsrf = params.xsrfToken || readStorage([params.headerXsrfToken, "XSRF-TOKEN", "xsrfToken", "x-xsrf-token"]) || readCookie(["XSRF-TOKEN", "xsrf-token"]);
+        if (params.headerXsrfToken && xsrf) headers[params.headerXsrfToken] = xsrf;
+        const loginResponse = await fetch(`${params.baseUrl}/api/login/login-by-code`, {
+            method: "POST",
+            credentials: "include",
+            headers,
+            body: form
+        });
+        const loginJson = await jsonOrText(loginResponse);
+        out.loginStatus = loginResponse.status;
+        out.loginCode = loginJson && loginJson.code;
+        out.loginSuccess = !!(loginJson && loginJson.success);
+        const token = loginJson && loginJson.data && (loginJson.data.accessToken || loginJson.data.token || loginJson.data.AccessToken);
+        if (!token) {
+            return {...out, message: loginJson && (loginJson.message || loginJson.errorMessage || JSON.stringify(loginJson).slice(0, 300))};
+        }
+
+        const storageKeys = [params.tokenKey, "AccessToken", "accessToken", "token", ...(params.tokenAlternativeKeys || [])]
+            .filter(Boolean)
+            .filter((value, index, arr) => arr.indexOf(value) === index);
+        for (const key of storageKeys) {
+            try { window.localStorage.setItem(key, token); } catch (_) {}
+        }
+        return {ok: true, step: "done", token, tokenLength: String(token).length, checkStatus: out.checkStatus, loginStatus: out.loginStatus};
+    }
+    """
+    try:
+        result = page.evaluate(script, params)
+    except Exception as e:
+        log(f"账号{account_index} - ⚠️ 绑定 m 站 token 异常: {type(e).__name__}: {e}")
+        return None
+    if isinstance(result, dict) and result.get("ok") and result.get("token"):
+        token_holder["value"] = result["token"]
+        log(
+            f"账号{account_index} - ✅ 已通过 login-by-code 绑定 m 站 token "
+            f"(check={result.get('checkStatus')} login={result.get('loginStatus')})"
+        )
+        return result["token"]
+    if isinstance(result, dict):
+        log(
+            f"账号{account_index} - ⚠️ 绑定 m 站 token 未成功: "
+            f"step={result.get('step')} check={result.get('checkStatus')} "
+            f"login={result.get('loginStatus')} message={truncate_text(result.get('message'), 300)}"
+        )
+    else:
+        log(f"账号{account_index} - ⚠️ 绑定 m 站 token 未返回有效结果")
     return None
 
 # ==============================================================================
@@ -1158,12 +1281,16 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
 
             secretkey_holder = {'value': None}
             token_holder = {'value': None}
+            xsrf_holder = {'value': None}
 
             def handle_route(route):
                 headers = {k.lower(): v for k, v in route.request.headers.items()}
                 key = headers.get(HEADER_SECRET_KEY.lower()) if HEADER_SECRET_KEY else None
                 if key:
                     secretkey_holder['value'] = key
+                xsrf = headers.get(HEADER_XSRF_TOKEN.lower()) if HEADER_XSRF_TOKEN else None
+                if xsrf:
+                    xsrf_holder['value'] = xsrf
                 token = headers.get(HEADER_ACCESS_TOKEN.lower())
                 if not token:
                     for hk in HEADER_ACCESS_TOKEN_FALLBACKS:
@@ -1248,13 +1375,17 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
                 log(f"账号{account_index} - ✅ 已进入首页")
 
             # 提取 token
-            access_token = extract_token_from_local_storage(page)
+            access_token = bind_m_site_access_token(page, token_holder, secretkey_holder, xsrf_holder, account_index)
+            if not access_token:
+                access_token = extract_token_from_local_storage(page)
             if not access_token:
                 access_token = wait_token_from_requests(token_holder, timeout=8)
 
             if not access_token:
                 page.reload(wait_until="networkidle")
-                access_token = extract_token_from_local_storage(page)
+                access_token = bind_m_site_access_token(page, token_holder, secretkey_holder, xsrf_holder, account_index)
+                if not access_token:
+                    access_token = extract_token_from_local_storage(page)
                 if not access_token:
                     access_token = wait_token_from_requests(token_holder, timeout=8)
 
