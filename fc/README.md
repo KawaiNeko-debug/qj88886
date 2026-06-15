@@ -19,7 +19,7 @@ Recommended FC settings:
 - HTTP trigger timeout: at least `1200` seconds
 - Instance concurrency: `1`
 - Maximum instances: at least the number of test accounts
-- Environment variable: `FC_INVOKE_TOKEN=<same value as GitHub secret ALIYUN_FC_INVOKE_TOKEN>`
+- Environment variable: `INVOKE_TOKEN=<same value as GitHub secret ALIYUN_FC_INVOKE_TOKEN>`
 
 This gives each account its own function invocation and browser process. It does not guarantee a unique public egress IP for each account.
 

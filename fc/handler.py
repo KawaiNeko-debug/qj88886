@@ -312,10 +312,10 @@ class Handler(BaseHTTPRequestHandler):
         self.write_json(404, {"ok": False, "message": "not found"})
 
     def do_POST(self) -> None:
-        expected_token = os.getenv("FC_INVOKE_TOKEN", "").strip()
+        expected_token = (os.getenv("INVOKE_TOKEN") or os.getenv("FC_INVOKE_TOKEN") or "").strip()
         auth_header = self.headers.get("Authorization", "")
         if not expected_token:
-            self.write_json(500, {"ok": False, "message": "FC_INVOKE_TOKEN is not configured"})
+            self.write_json(500, {"ok": False, "message": "INVOKE_TOKEN is not configured"})
             return
         if auth_header != f"Bearer {expected_token}":
             self.write_json(401, {"ok": False, "message": "unauthorized"})
