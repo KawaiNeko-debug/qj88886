@@ -93,7 +93,7 @@ def parse_accounts(raw: str) -> list[tuple[str, str]]:
         elif "," in text:
             username, password = text.split(",", 1)
         else:
-            print(f"[accounts] skipped invalid line: {text[:12]}***")
+            print(f"[accounts] skipped invalid line: {text[:12]}***", flush=True)
             continue
         username = username.strip()
         password = password.strip()
@@ -223,7 +223,7 @@ def write_payload(rows: list[dict[str, Any]], group_number: int, group_name: str
     }
     with open(OUTPUT_DIR / "manifest.json", "w", encoding="utf-8") as file:
         json.dump(manifest, file, ensure_ascii=False, indent=2)
-    print(f"[result] wrote {OUTPUT_PATH} rows={len(rows)}")
+    print(f"[result] wrote {OUTPUT_PATH} rows={len(rows)}", flush=True)
 
 
 def main() -> int:
@@ -237,7 +237,7 @@ def main() -> int:
         accounts = accounts[:limit]
 
     if not accounts:
-        print("[accounts] ACCOUNTS_TEST is empty or invalid")
+        print("[accounts] ACCOUNTS_TEST is empty or invalid", flush=True)
         write_payload([], group_number, group_name)
         return 0
 
@@ -248,12 +248,13 @@ def main() -> int:
         return 0
 
     hard_stop_after = safe_float(os.getenv("HARD_STOP_AFTER_MINUTES"), 6.0)
-    timeout_seconds = max(600, int(hard_stop_after * 60) + 300)
+    timeout_extra_seconds = safe_int(os.getenv("FC_CALL_TIMEOUT_EXTRA_SECONDS"), 180)
+    timeout_seconds = max(180, int(hard_stop_after * 60) + max(60, timeout_extra_seconds))
     max_parallel = safe_int(os.getenv("FC_TEST_MAX_PARALLEL"), len(accounts))
     max_parallel = max(1, min(max_parallel, len(accounts)))
     secret_env = selected_secret_env()
 
-    print(f"[fc-test] accounts={len(accounts)} parallel={max_parallel} timeout={timeout_seconds}s")
+    print(f"[fc-test] accounts={len(accounts)} parallel={max_parallel} timeout={timeout_seconds}s", flush=True)
     rows: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_parallel) as executor:
         futures = []
@@ -275,7 +276,7 @@ def main() -> int:
                 "timeout_seconds": timeout_seconds,
                 "env": secret_env,
             }
-            print(f"[fc-test] submit account {account_index}/{len(accounts)} user={mask_account(username)}")
+            print(f"[fc-test] submit account {account_index}/{len(accounts)} user={mask_account(username)}", flush=True)
             futures.append(executor.submit(invoke_fc, url, token, payload, timeout_seconds))
 
         for future in concurrent.futures.as_completed(futures):
@@ -284,7 +285,7 @@ def main() -> int:
     rows.sort(key=lambda item: safe_int(item.get("account_index"), 999))
     write_payload(rows, group_number, group_name)
     success_count = sum(1 for row in rows if truthy(row.get("sign_success")))
-    print(f"[fc-test] done success={success_count} failed={len(rows) - success_count}")
+    print(f"[fc-test] done success={success_count} failed={len(rows) - success_count}", flush=True)
     return 0
 
 

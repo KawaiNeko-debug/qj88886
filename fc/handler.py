@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
+HANDLER_VERSION = "2026-06-16-invoke-token-v2"
 
 ALLOWED_ENV_KEYS = {
     "PASSPORT_URL",
@@ -307,15 +308,42 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/" or self.path.startswith("/health"):
-            self.write_json(200, {"ok": True, "time": now_text()})
+            configured_names = [
+                name
+                for name in ("INVOKE_TOKEN", "FC_INVOKE_TOKEN", "ALIYUN_FC_INVOKE_TOKEN")
+                if os.getenv(name)
+            ]
+            self.write_json(
+                200,
+                {
+                    "ok": True,
+                    "time": now_text(),
+                    "version": HANDLER_VERSION,
+                    "token_env_configured": bool(configured_names),
+                    "token_env_names": configured_names,
+                },
+            )
             return
         self.write_json(404, {"ok": False, "message": "not found"})
 
     def do_POST(self) -> None:
-        expected_token = (os.getenv("INVOKE_TOKEN") or os.getenv("FC_INVOKE_TOKEN") or "").strip()
+        expected_token = (
+            os.getenv("INVOKE_TOKEN")
+            or os.getenv("FC_INVOKE_TOKEN")
+            or os.getenv("ALIYUN_FC_INVOKE_TOKEN")
+            or ""
+        ).strip()
         auth_header = self.headers.get("Authorization", "")
         if not expected_token:
-            self.write_json(500, {"ok": False, "message": "INVOKE_TOKEN is not configured"})
+            self.write_json(
+                500,
+                {
+                    "ok": False,
+                    "message": "INVOKE_TOKEN is not configured",
+                    "version": HANDLER_VERSION,
+                    "accepted_env_names": ["INVOKE_TOKEN", "FC_INVOKE_TOKEN", "ALIYUN_FC_INVOKE_TOKEN"],
+                },
+            )
             return
         if auth_header != f"Bearer {expected_token}":
             self.write_json(401, {"ok": False, "message": "unauthorized"})
