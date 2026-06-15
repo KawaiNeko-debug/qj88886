@@ -1,0 +1,76 @@
+name: build-fc-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to push"
+        required: true
+        default: "latest"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check ACR secrets
+        shell: bash
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+          ACR_REPOSITORY: ${{ secrets.ACR_REPOSITORY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          missing=0
+          for name in ACR_REGISTRY ACR_NAMESPACE ACR_REPOSITORY ACR_USERNAME ACR_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=missing secret::$name is empty"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Login to Alibaba Cloud ACR
+        shell: bash
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: |
+          echo "$ACR_PASSWORD" | docker login --username "$ACR_USERNAME" --password-stdin "$ACR_REGISTRY"
+
+      - name: Build and push FC image
+        id: image
+        shell: bash
+        env:
+          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+          ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
+          ACR_REPOSITORY: ${{ secrets.ACR_REPOSITORY }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          IMAGE="$ACR_REGISTRY/$ACR_NAMESPACE/$ACR_REPOSITORY:$IMAGE_TAG"
+          docker build -f fc/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          {
+            echo "image=$IMAGE"
+            echo "### FC image pushed"
+            echo ""
+            echo "\`$IMAGE\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Print image address
+        run: |
+          echo "FC container image:"
+          echo "${{ steps.image.outputs.image }}"

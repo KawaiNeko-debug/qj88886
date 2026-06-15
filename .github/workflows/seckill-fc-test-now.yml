@@ -1,0 +1,123 @@
+name: seckill-fc-test-now
+
+on:
+  workflow_dispatch:
+    inputs:
+      account_limit:
+        description: "How many ACCOUNTS_TEST lines to run"
+        required: true
+        default: "2"
+        type: string
+      login_after_minutes:
+        description: "Minutes after manual start to begin login"
+        required: true
+        default: "1"
+        type: string
+      seckill_after_minutes:
+        description: "Minutes after manual start to begin seckill"
+        required: true
+        default: "5"
+        type: string
+      hard_stop_after_minutes:
+        description: "Minutes after manual start to force stop"
+        required: true
+        default: "6"
+        type: string
+      target_keyword:
+        description: "Optional test target keyword; empty uses h3/seckill_config.yml batch10"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  fc-test:
+    name: Trigger FC test and send summary
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install report dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r h3/requirements.txt
+
+      - name: Trigger FC account invocations
+        env:
+          ALIYUN_FC_SECKILL_URL: ${{ secrets.ALIYUN_FC_SECKILL_URL }}
+          ALIYUN_FC_INVOKE_TOKEN: ${{ secrets.ALIYUN_FC_INVOKE_TOKEN }}
+          ACCOUNTS_TEST: ${{ secrets.ACCOUNTS_TEST }}
+          FC_TEST_ACCOUNT_LIMIT: ${{ inputs.account_limit }}
+          FC_TEST_GROUP_NUMBER: "10"
+          FC_TEST_GROUP_NAME: seckill-fc-test
+          RELATIVE_TIMING: "true"
+          LOGIN_AFTER_MINUTES: ${{ inputs.login_after_minutes }}
+          SECKILL_AFTER_MINUTES: ${{ inputs.seckill_after_minutes }}
+          HARD_STOP_AFTER_MINUTES: ${{ inputs.hard_stop_after_minutes }}
+          SECKILL_TARGET_KEYWORD: ${{ inputs.target_keyword }}
+          PASSPORT_URL: ${{ secrets.PASSPORT_URL }}
+          SLIDER_ID: ${{ secrets.SLIDER_ID }}
+          WRAPPER_ID: ${{ secrets.WRAPPER_ID }}
+          BASE_URL: ${{ secrets.BASE_URL }}
+          SECKILL_BASE_URL: ${{ secrets.SECKILL_BASE_URL }}
+          SECKILL_CATEGORY_ACCESS_ID: ${{ secrets.SECKILL_CATEGORY_ACCESS_ID }}
+          SECKILL_REFERER: ${{ secrets.SECKILL_REFERER }}
+          REFERER: ${{ secrets.REFERER }}
+          JLC_REFERER: ${{ secrets.JLC_REFERER }}
+          HEADER_CLIENT_TYPE: ${{ secrets.HEADER_CLIENT_TYPE }}
+          HEADER_ACCESS_TOKEN: ${{ secrets.HEADER_ACCESS_TOKEN }}
+          HEADER_ACCESS_TOKEN_FALLBACKS: ${{ secrets.HEADER_ACCESS_TOKEN_FALLBACKS }}
+          HEADER_SECRET_KEY: ${{ secrets.HEADER_SECRET_KEY }}
+          HEADER_XSRF_TOKEN: ${{ secrets.HEADER_XSRF_TOKEN }}
+          TOKEN_KEY: ${{ secrets.TOKEN_KEY }}
+          TOKEN_ALTERNATIVE_KEYS: ${{ secrets.TOKEN_ALTERNATIVE_KEYS }}
+          JLC_CLIENT_TYPE: ${{ secrets.JLC_CLIENT_TYPE }}
+          JLC_SECRET_KEY_VALUE: ${{ secrets.JLC_SECRET_KEY_VALUE }}
+          JLC_USE_HTTP2: ${{ secrets.JLC_USE_HTTP2 }}
+          JLC_ACCEPT_LANGUAGE: ${{ secrets.JLC_ACCEPT_LANGUAGE }}
+          JLC_CAS_APP_ID: ${{ secrets.JLC_CAS_APP_ID }}
+          JLC_BIND_TOKEN_ENABLED: ${{ secrets.JLC_BIND_TOKEN_ENABLED }}
+          JLC_MP_APPID: ${{ secrets.JLC_MP_APPID }}
+          JLC_MP_PAGE_VERSION: ${{ secrets.JLC_MP_PAGE_VERSION }}
+          JLC_MP_VERSION: ${{ secrets.JLC_MP_VERSION }}
+          JLC_MP_ENV: ${{ secrets.JLC_MP_ENV }}
+          JLC_USER_AGENT: ${{ secrets.JLC_USER_AGENT }}
+          BROWSER_VIEWPORT_WIDTH: ${{ secrets.BROWSER_VIEWPORT_WIDTH }}
+          BROWSER_VIEWPORT_HEIGHT: ${{ secrets.BROWSER_VIEWPORT_HEIGHT }}
+          BROWSER_DEVICE_SCALE_FACTOR: ${{ secrets.BROWSER_DEVICE_SCALE_FACTOR }}
+          SECKILL_RESPONSE_LOG_LIMIT: ${{ secrets.SECKILL_RESPONSE_LOG_LIMIT }}
+          SECKILL_RESPONSE_LOG_EVERY: ${{ secrets.SECKILL_RESPONSE_LOG_EVERY }}
+          SECKILL_RESPONSE_LOG_BODY_CHARS: ${{ secrets.SECKILL_RESPONSE_LOG_BODY_CHARS }}
+          SECKILL_GO_DISABLE_HTTP2: ${{ secrets.SECKILL_GO_DISABLE_HTTP2 }}
+        run: python fc/test_now.py
+
+      - name: Build and send Telegram summary
+        if: always()
+        env:
+          NOTIFY_CHANNELS: telegram
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python h3/seckill_report.py fc-results
+
+      - name: Upload FC test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seckill-fc-test-now-result
+          path: |
+            fc-results/**
+          if-no-files-found: warn
+          retention-days: 7
