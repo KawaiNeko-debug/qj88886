@@ -12,16 +12,16 @@ on:
         default: false
       login_after_minutes:
         required: false
-        type: number
-        default: 1
+        type: string
+        default: "1"
       seckill_after_minutes:
         required: false
-        type: number
-        default: 5
+        type: string
+        default: "5"
       hard_stop_after_minutes:
         required: false
-        type: number
-        default: 6
+        type: string
+        default: "6"
       target_keyword:
         required: false
         type: string

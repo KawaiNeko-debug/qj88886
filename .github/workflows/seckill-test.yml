@@ -6,18 +6,18 @@ on:
       seckill_after_minutes:
         description: "手动启动后几分钟开始抢购"
         required: true
-        default: 5
-        type: number
+        default: "5"
+        type: string
       login_after_minutes:
         description: "手动启动后几分钟开始登录"
         required: true
-        default: 1
-        type: number
+        default: "1"
+        type: string
       hard_stop_after_minutes:
         description: "手动启动后几分钟强制结束"
         required: true
-        default: 6
-        type: number
+        default: "6"
+        type: string
       target_keyword:
         description: "测试商品关键词；留空则使用 h3/seckill_config.yml 的 batch10"
         required: false
