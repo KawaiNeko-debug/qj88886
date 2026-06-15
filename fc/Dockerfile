@@ -1,3 +1,9 @@
+FROM golang:1.22-bookworm AS go-builder
+
+WORKDIR /src
+COPY h3/seckill_sender.go /src/h3/seckill_sender.go
+RUN go build -o /src/seckill_sender /src/h3/seckill_sender.go
+
 FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 
 WORKDIR /app
@@ -9,7 +15,7 @@ ENV TZ=Asia/Shanghai \
     SECKILL_SENDER=go
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends golang-go tzdata \
+    && apt-get install -y --no-install-recommends tzdata \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
@@ -21,8 +27,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 
 COPY h3 /app/h3
 COPY fc /app/fc
-
-RUN go build -o /app/h3/seckill_sender /app/h3/seckill_sender.go
+COPY --from=go-builder /src/seckill_sender /app/h3/seckill_sender
 
 EXPOSE 9000
 
