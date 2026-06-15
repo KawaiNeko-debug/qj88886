@@ -32,34 +32,60 @@ jobs:
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
           ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
         run: |
+          clean_text() {
+            printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+          }
           missing=0
           for name in ACR_REGISTRY ACR_NAMESPACE ACR_REPOSITORY ACR_USERNAME ACR_PASSWORD; do
-            if [ -z "${!name}" ]; then
+            value="$(clean_text "${!name}")"
+            if [ -z "$value" ]; then
               echo "::error title=missing secret::$name is empty"
               missing=1
             fi
           done
           exit "$missing"
 
-      - name: Login to Alibaba Cloud ACR
-        shell: bash
-        env:
-          ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
-          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
-          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
-        run: |
-          echo "$ACR_PASSWORD" | docker login --username "$ACR_USERNAME" --password-stdin "$ACR_REGISTRY"
-
-      - name: Build and push FC image
-        id: image
+      - name: Normalize ACR config
         shell: bash
         env:
           ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
           ACR_NAMESPACE: ${{ secrets.ACR_NAMESPACE }}
           ACR_REPOSITORY: ${{ secrets.ACR_REPOSITORY }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
           IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
-          IMAGE="$ACR_REGISTRY/$ACR_NAMESPACE/$ACR_REPOSITORY:$IMAGE_TAG"
+          clean_text() {
+            printf '%s' "$1" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+          }
+          clean_slug() {
+            clean_text "$1" | tr -d '[:space:]'
+          }
+          clean_registry() {
+            clean_slug "$1" | sed -e 's#^https\?://##' -e 's#/*$##'
+          }
+          {
+            echo "CLEAN_ACR_REGISTRY=$(clean_registry "$ACR_REGISTRY")"
+            echo "CLEAN_ACR_NAMESPACE=$(clean_slug "$ACR_NAMESPACE")"
+            echo "CLEAN_ACR_REPOSITORY=$(clean_slug "$ACR_REPOSITORY")"
+            echo "CLEAN_ACR_USERNAME=$(clean_text "$ACR_USERNAME")"
+            echo "CLEAN_IMAGE_TAG=$(clean_slug "$IMAGE_TAG")"
+            echo "CLEAN_ACR_PASSWORD<<__ACR_PASSWORD__"
+            clean_text "$ACR_PASSWORD"
+            echo
+            echo "__ACR_PASSWORD__"
+          } >> "$GITHUB_ENV"
+
+      - name: Login to Alibaba Cloud ACR
+        shell: bash
+        run: |
+          printf '%s' "$CLEAN_ACR_PASSWORD" | docker login --username "$CLEAN_ACR_USERNAME" --password-stdin "$CLEAN_ACR_REGISTRY"
+
+      - name: Build and push FC image
+        id: image
+        shell: bash
+        run: |
+          IMAGE="$CLEAN_ACR_REGISTRY/$CLEAN_ACR_NAMESPACE/$CLEAN_ACR_REPOSITORY:$CLEAN_IMAGE_TAG"
           docker build -f fc/Dockerfile -t "$IMAGE" .
           docker push "$IMAGE"
           {
