@@ -62,3 +62,138 @@ jobs:
       BROWSER_VIEWPORT_WIDTH: ${{ secrets.BROWSER_VIEWPORT_WIDTH }}
       BROWSER_VIEWPORT_HEIGHT: ${{ secrets.BROWSER_VIEWPORT_HEIGHT }}
       BROWSER_DEVICE_SCALE_FACTOR: ${{ secrets.BROWSER_DEVICE_SCALE_FACTOR }}
+
+  summary:
+    name: Send test Telegram summary
+    needs: run
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download test batch result
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: seckill-batch10-result
+          path: test-results
+
+      - name: Send Telegram test summary
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TEST_WORKFLOW_RESULT: ${{ needs.run.result }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import glob
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
+
+          local_tz = ZoneInfo("Asia/Shanghai")
+          result_files = glob.glob("test-results/**/*.json", recursive=True)
+
+          def truthy(value):
+              if value is True:
+                  return True
+              if value in (False, None):
+                  return False
+              return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+          def seckill_record(row):
+              activity = row.get("activity_records") if isinstance(row.get("activity_records"), dict) else {}
+              records = activity.get("seckill")
+              if isinstance(records, list) and records and isinstance(records[0], dict):
+                  return records[0]
+              return {}
+
+          lines = [
+              f"{datetime.now(local_tz).strftime('%Y-%m-%d %H:%M:%S')} 测试秒杀总结",
+              f"Workflow: {os.getenv('TEST_WORKFLOW_RESULT', 'unknown')}",
+              f"Run: {os.getenv('TEST_RUN_URL', '')}",
+          ]
+
+          if not result_files:
+              lines.append("结果: 未找到 seckill-batch10-result artifact，可能测试流程未跑到合并阶段。")
+          else:
+              rows = []
+              for path in result_files:
+                  try:
+                      with open(path, "r", encoding="utf-8") as file:
+                          payload = json.load(file)
+                      payload_rows = payload.get("results") if isinstance(payload, dict) else None
+                      if isinstance(payload_rows, list):
+                          rows.extend(item for item in payload_rows if isinstance(item, dict))
+                  except Exception as exc:
+                      lines.append(f"读取结果失败: {path}: {type(exc).__name__}: {exc}")
+
+              total = len(rows)
+              success_rows = [row for row in rows if truthy(row.get("sign_success")) or truthy(seckill_record(row).get("success"))]
+              failed_rows = [row for row in rows if row not in success_rows]
+              attempts = sum(int(seckill_record(row).get("attempts_sent") or 0) for row in rows)
+              lines.extend([
+                  f"账号数: {total}",
+                  f"成功: {len(success_rows)}",
+                  f"失败: {len(failed_rows)}",
+                  f"总发包数: {attempts}",
+              ])
+
+              if success_rows:
+                  lines.append("成功账号:")
+                  for row in success_rows[:20]:
+                      rec = seckill_record(row)
+                      lines.append(
+                          f"- {row.get('group_position') or row.get('account_index')}: "
+                          f"{rec.get('title') or row.get('sign_status') or '秒杀成功'}"
+                      )
+
+              if failed_rows:
+                  lines.append("失败账号:")
+                  for row in failed_rows[:30]:
+                      rec = seckill_record(row)
+                      reason = row.get("detail_reason") or rec.get("last_response_message") or row.get("sign_status") or "未知失败"
+                      lines.append(f"- {row.get('group_position') or row.get('account_index')}: {reason[:180]}")
+                  if len(failed_rows) > 30:
+                      lines.append(f"...还有 {len(failed_rows) - 30} 个失败账号")
+
+              response_counts = {}
+              for row in rows:
+                  counts = seckill_record(row).get("response_counts")
+                  if not isinstance(counts, dict):
+                      continue
+                  for key, count in counts.items():
+                      try:
+                          response_counts[key] = response_counts.get(key, 0) + int(count)
+                      except Exception:
+                          pass
+              if response_counts:
+                  lines.append("返回统计 Top 8:")
+                  for key, count in sorted(response_counts.items(), key=lambda item: (-item[1], item[0]))[:8]:
+                      lines.append(f"- {count}x {key[:220]}")
+
+          text = "\n".join(lines)
+          print(text)
+
+          token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+          chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+          if not token or not chat_id:
+              print("[telegram] skipped: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID empty")
+              raise SystemExit(0)
+
+          data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
+          req = urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data=data,
+              headers={"Content-Type": "application/x-www-form-urlencoded"},
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  body = response.read().decode("utf-8", errors="replace")
+                  print(f"[telegram] status={response.status} body={body[:300]}")
+          except Exception as exc:
+              print(f"[telegram] failed: {type(exc).__name__}: {exc}")
+              raise SystemExit(1)
+          PY

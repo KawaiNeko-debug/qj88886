@@ -53,7 +53,11 @@ def now_ms() -> float:
 
 
 def log(message: str):
-    print(f"[{datetime.now(LOCAL_TZ).strftime('%H:%M:%S')}] {message}", flush=True)
+    print(f"[{datetime.now(LOCAL_TZ).strftime('%H:%M:%S.%f')[:-3]}] {message}", flush=True)
+
+
+def format_ms(timestamp_ms: float) -> str:
+    return datetime.fromtimestamp(timestamp_ms / 1000.0, LOCAL_TZ).strftime("%H:%M:%S.%f")[:-3]
 
 
 def mask_account(account: str) -> str:
@@ -133,6 +137,9 @@ def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         "SECKILL_FIXED_LEAD_MS": ("fixed_lead_ms", int),
         "SECKILL_CALIBRATION_INTERVAL_MS": ("calibration_interval_ms", int),
         "SECKILL_CALIBRATION_SAMPLE_SIZE": ("calibration_sample_size", int),
+        "SECKILL_RESPONSE_LOG_LIMIT": ("response_log_limit", int),
+        "SECKILL_RESPONSE_LOG_EVERY": ("response_log_every", int),
+        "SECKILL_RESPONSE_LOG_BODY_CHARS": ("response_log_body_chars", int),
     }
     for env_name, (key, caster) in mappings.items():
         raw = os.getenv(env_name)
@@ -185,6 +192,9 @@ class SeckillRuntime:
     success_sent_at: str = ""
     success_received_at: str = ""
     last_response_message: str = ""
+    response_logs_emitted: int = 0
+    response_counts: dict[str, int] = field(default_factory=dict)
+    counter_lock: threading.Lock = field(default_factory=threading.Lock)
     stop_event: threading.Event = field(default_factory=threading.Event)
 
     def add_sample(self, sample: CalibrationSample):
@@ -230,6 +240,31 @@ def safe_message(data: Any) -> str:
         except Exception:
             return str(data)[:500]
     return str(data or "")[:500]
+
+
+def json_preview(data: Any, fallback: str = "", limit: int = 500) -> str:
+    try:
+        if isinstance(data, dict):
+            text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        elif data is not None:
+            text = str(data)
+        else:
+            text = fallback or ""
+    except Exception:
+        text = fallback or str(data or "")
+    text = " ".join(str(text).split())
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"...(truncated,len={len(text)})"
+
+
+def response_fingerprint(data: Any, http_status: int) -> str:
+    if isinstance(data, dict):
+        return (
+            f"http={http_status} code={data.get('code')} "
+            f"success={data.get('success')} msg={safe_message(data)[:160]}"
+        )
+    return f"http={http_status} non-json"
 
 
 def prepare_legacy_env(config: dict[str, Any]):
@@ -290,27 +325,29 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 except Exception:
                     self.http = None
 
-        def _post(self, url: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | None, float, float, str]:
+        def _post(self, url: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | None, float, float, str, int]:
             start = now_ms()
             response_text = ""
+            status_code = 0
             try:
                 if self.http:
                     response = self.http.post(url, headers=self.headers, json=payload)
                 else:
                     response = requests.post(url, headers=self.headers, json=payload, timeout=5)
                 end = now_ms()
+                status_code = int(response.status_code)
                 response_text = response.text
                 try:
-                    return response.json(), start, end, response_text
+                    return response.json(), start, end, response_text, status_code
                 except Exception:
-                    return {"success": False, "code": response.status_code, "message": response_text[:500]}, start, end, response_text
+                    return {"success": False, "code": status_code, "message": response_text[:500]}, start, end, response_text, status_code
             except Exception as exc:
                 end = now_ms()
-                return {"success": False, "code": 0, "message": f"{type(exc).__name__}: {exc}"}, start, end, response_text
+                return {"success": False, "code": 0, "message": f"{type(exc).__name__}: {exc}"}, start, end, response_text, status_code
 
         def fetch_goods_once(self, tag: str = "goods") -> dict[str, Any] | None:
             payload = {"categoryAccessId": self.category_access_id}
-            data, local_start, local_end, _ = self._post(self.list_url, payload)
+            data, local_start, local_end, _, _ = self._post(self.list_url, payload)
             if not isinstance(data, dict):
                 return None
             body = data.get("data") if isinstance(data.get("data"), dict) else {}
@@ -397,19 +434,43 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 "categoryAccessId": self.category_access_id,
                 "source": self.source,
             }
-            sent_at = datetime.now(LOCAL_TZ)
-            data, _, _, text = self._post(self.buy_url, payload)
-            received_at = datetime.now(LOCAL_TZ)
-            runtime.attempts_sent += 1
-            if runtime.first_response is None:
-                runtime.first_response = data if isinstance(data, dict) else {"raw": text[:500]}
-            if isinstance(data, dict):
-                runtime.last_response_message = safe_message(data)
-                if data.get("code") == 200 and data.get("success") is True:
+            with runtime.counter_lock:
+                runtime.attempts_sent += 1
+                attempt_number = runtime.attempts_sent
+            data, local_start, local_end, text, http_status = self._post(self.buy_url, payload)
+            sent_at = datetime.fromtimestamp(local_start / 1000.0, LOCAL_TZ)
+            received_at = datetime.fromtimestamp(local_end / 1000.0, LOCAL_TZ)
+            success = isinstance(data, dict) and data.get("code") == 200 and data.get("success") is True
+            fingerprint = response_fingerprint(data, http_status)
+            should_log = success
+            with runtime.counter_lock:
+                runtime.response_counts[fingerprint] = runtime.response_counts.get(fingerprint, 0) + 1
+                if runtime.first_response is None:
+                    runtime.first_response = data if isinstance(data, dict) else {"raw": text[:500]}
+                    should_log = True
+                if isinstance(data, dict):
+                    runtime.last_response_message = safe_message(data)
+                log_limit = max(0, safe_int(runtime.config.get("response_log_limit"), 50))
+                log_every = max(0, safe_int(runtime.config.get("response_log_every"), 200))
+                if runtime.response_logs_emitted < log_limit:
+                    should_log = True
+                if log_every and attempt_number % log_every == 0:
+                    should_log = True
+                if should_log:
+                    runtime.response_logs_emitted += 1
+                if success:
                     runtime.success_response = data
                     runtime.success_sent_at = sent_at.isoformat()
                     runtime.success_received_at = received_at.isoformat()
                     runtime.stop_event.set()
+            if should_log:
+                preview_limit = safe_int(runtime.config.get("response_log_body_chars"), 500)
+                log(
+                    f"account {self.account_index}: response #{attempt_number} "
+                    f"sent={format_ms(local_start)} recv={format_ms(local_end)} "
+                    f"rtt={local_end - local_start:.1f}ms http={http_status} "
+                    f"body={json_preview(data, text, preview_limit)}"
+                )
             return data if isinstance(data, dict) else {"success": False, "code": 0, "message": text[:500]}
 
         def fire_concurrent(self, count: int, executor: concurrent.futures.ThreadPoolExecutor) -> list[concurrent.futures.Future]:
@@ -455,6 +516,12 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                     f"account {self.account_index}: send loop ended rounds={round_number} "
                     f"attempts={runtime.attempts_sent} success={bool(runtime.success_response)}"
                 )
+                if runtime.response_counts:
+                    summary = sorted(runtime.response_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+                    log(
+                        f"account {self.account_index}: response summary "
+                        + " | ".join(f"{count}x {key}" for key, count in summary)
+                    )
 
                 drain_until = min(hard_stop_ms, now_ms() + 3000)
                 while now_ms() < drain_until and not runtime.stop_event.is_set():
@@ -481,6 +548,7 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 "first_response": runtime.first_response or {},
                 "success_response": runtime.success_response or {},
                 "last_response_message": runtime.last_response_message,
+                "response_counts": runtime.response_counts,
                 "calibration_samples": len(runtime.samples),
                 "median_server_delta_ms": runtime.median_delta(),
                 "median_rtt_ms": runtime.median_rtt(),

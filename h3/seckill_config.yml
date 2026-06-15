@@ -11,6 +11,9 @@ defaults:
   fixed_lead_ms: 500
   calibration_interval_ms: 1500
   calibration_sample_size: 15
+  response_log_limit: 50
+  response_log_every: 200
+  response_log_body_chars: 500
   list_path: "/api/activity/seckill/ns/getSeckillGoods"
   buy_path: "/api/activity/seckill/exchangeSeckillGoods"
 

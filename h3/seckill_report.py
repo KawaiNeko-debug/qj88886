@@ -97,6 +97,19 @@ def seckill_record(row: dict) -> dict:
     return {}
 
 
+def cell_text(value, limit: int = 32000) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        text = str(value)
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"...(truncated,len={len(text)})"
+
+
 def normalize_record(row: dict, payload: dict) -> dict:
     group_number = safe_int(row.get("group_number") or payload.get("group_number"), 0)
     account_index = safe_int(row.get("account_index"), 0)
@@ -126,6 +139,9 @@ def normalize_record(row: dict, payload: dict) -> dict:
         "median_server_delta_ms": rec.get("median_server_delta_ms"),
         "success_sent_at": rec.get("success_sent_at") or "",
         "success_received_at": rec.get("success_received_at") or "",
+        "response_counts": rec.get("response_counts") if isinstance(rec.get("response_counts"), dict) else {},
+        "first_response": rec.get("first_response") if isinstance(rec.get("first_response"), dict) else {},
+        "success_response": rec.get("success_response") if isinstance(rec.get("success_response"), dict) else {},
     }
 
 
@@ -169,6 +185,9 @@ def missing_record(group_number: int, account_index: int, username: str) -> dict
         "median_server_delta_ms": "",
         "success_sent_at": "",
         "success_received_at": "",
+        "response_counts": {},
+        "first_response": {},
+        "success_response": {},
     }
 
 
@@ -331,6 +350,98 @@ def write_xlsx(path: str, records: list[dict]):
     }
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
+
+    stats_sheet = workbook.create_sheet("返回统计")
+    stats_headers = [
+        "序号",
+        "组别",
+        "账号",
+        "商品",
+        "发包数",
+        "返回次数",
+        "占比",
+        "返回摘要",
+        "首次返回",
+        "成功返回",
+    ]
+    stats_sheet.append(stats_headers)
+    for cell in stats_sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    max_stats_rows = max(0, safe_int(os.getenv("XLSX_RESPONSE_STATS_MAX_ROWS"), 5000))
+    stats_index = 0
+    truncated = False
+    for item in sort_records(records):
+        counts = item.get("response_counts") if isinstance(item.get("response_counts"), dict) else {}
+        attempts = max(0, safe_int(item.get("attempts_sent"), 0))
+        if not counts:
+            continue
+        first_row_for_account = True
+        for summary, count in sorted(counts.items(), key=lambda pair: (-safe_int(pair[1], 0), str(pair[0]))):
+            if max_stats_rows and stats_index >= max_stats_rows:
+                truncated = True
+                break
+            stats_index += 1
+            response_count = safe_int(count, 0)
+            ratio = response_count / attempts if attempts else ""
+            stats_sheet.append(
+                [
+                    stats_index,
+                    item.get("group_position", ""),
+                    item.get("username", ""),
+                    item.get("title", ""),
+                    attempts,
+                    response_count,
+                    ratio,
+                    cell_text(summary, 1200),
+                    cell_text(item.get("first_response"), 1600) if first_row_for_account else "",
+                    cell_text(item.get("success_response"), 1600) if first_row_for_account and item.get("success_response") else "",
+                ]
+            )
+            first_row_for_account = False
+            row_index = stats_sheet.max_row
+            for cell in stats_sheet[row_index]:
+                cell.border = border
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+            if isinstance(ratio, float):
+                stats_sheet.cell(row_index, 7).number_format = "0.00%"
+        if truncated:
+            break
+    if truncated:
+        stats_sheet.append(
+            [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                f"返回统计超过 XLSX_RESPONSE_STATS_MAX_ROWS={max_stats_rows}，已截断；完整聚合仍保存在 result.json",
+                "",
+                "",
+            ]
+        )
+
+    stats_sheet.freeze_panes = "A2"
+    stats_widths = {
+        "A": 8,
+        "B": 16,
+        "C": 24,
+        "D": 30,
+        "E": 12,
+        "F": 12,
+        "G": 12,
+        "H": 90,
+        "I": 70,
+        "J": 70,
+    }
+    for column, width in stats_widths.items():
+        stats_sheet.column_dimensions[column].width = width
+
     directory = os.path.dirname(path)
     if directory:
         os.makedirs(directory, exist_ok=True)
