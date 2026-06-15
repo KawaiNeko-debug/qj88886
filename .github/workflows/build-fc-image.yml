@@ -81,6 +81,13 @@ jobs:
         run: |
           printf '%s' "$CLEAN_ACR_PASSWORD" | docker login --username "$CLEAN_ACR_USERNAME" --password-stdin "$CLEAN_ACR_REGISTRY"
 
+      - name: Verify FC Dockerfile
+        shell: bash
+        run: |
+          sed -n '1,60p' fc/Dockerfile
+          grep -q 'golang:1.22' fc/Dockerfile
+          grep -q 'COPY --from=go-builder' fc/Dockerfile
+
       - name: Build and push FC image
         id: image
         shell: bash
