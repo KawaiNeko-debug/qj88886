@@ -87,6 +87,7 @@ jobs:
           sed -n '1,60p' fc/Dockerfile
           grep -q 'golang:1.22' fc/Dockerfile
           grep -q 'COPY --from=go-builder' fc/Dockerfile
+          grep -q 'INVOKE_TOKEN' fc/handler.py
 
       - name: Build and push FC image
         id: image
