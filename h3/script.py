@@ -1174,7 +1174,7 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
                     token_holder['value'] = token
                 route.continue_()
 
-            context.route(f"**{LOGIN_API_PATH}*", handle_route)
+            context.route(URL_PATTERN, handle_route)
 
             # ---------- 登录流程 ----------
             log(f"账号{account_index} - 打开移动登录页...")

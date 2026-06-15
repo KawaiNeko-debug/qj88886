@@ -4,6 +4,7 @@ import importlib
 import json
 import math
 import os
+import random
 import statistics
 import sys
 import threading
@@ -234,11 +235,13 @@ def safe_message(data: Any) -> str:
 def prepare_legacy_env(config: dict[str, Any]):
     base_url = str(config.get("base_url") or os.getenv("SECKILL_BASE_URL") or os.getenv("BASE_URL") or "").strip()
     referer = str(config.get("referer") or os.getenv("SECKILL_REFERER") or os.getenv("REFERER") or "").strip()
-    if base_url:
-        os.environ.setdefault("BASE_URL", base_url)
+    if base_url and not os.getenv("BASE_URL"):
+        os.environ["BASE_URL"] = base_url
     if referer:
-        os.environ.setdefault("REFERER", referer)
-        os.environ.setdefault("JLC_REFERER", referer)
+        if not os.getenv("REFERER"):
+            os.environ["REFERER"] = referer
+        if not os.getenv("JLC_REFERER"):
+            os.environ["JLC_REFERER"] = referer
     if os.getenv("SECKILL_CLIENT_TYPE"):
         os.environ.setdefault("JLC_CLIENT_TYPE", os.getenv("SECKILL_CLIENT_TYPE", ""))
     if os.getenv("SECKILL_USE_HTTP2"):
@@ -551,17 +554,38 @@ def run_live(args) -> int:
     runtime = SeckillRuntime(config=config)
     legacy = import_legacy_script(config)
     install_seckill_client(legacy, runtime)
-    result = legacy.sign_in_account(
-        args.username,
-        args.password,
-        args.account_index,
-        args.total_accounts,
-        retry_count=safe_int(os.getenv("RETRY_COUNT"), 0),
-        is_final_retry=truthy(os.getenv("IS_FINAL_RETRY", "false")),
-    )
+
+    result = None
+    max_login_retries = max(0, safe_int(os.getenv("LOGIN_MAX_RETRIES"), 3))
+    for attempt in range(max_login_retries + 1):
+        result = legacy.sign_in_account(
+            args.username,
+            args.password,
+            args.account_index,
+            args.total_accounts,
+            retry_count=attempt,
+            is_final_retry=attempt >= max_login_retries,
+        )
+        if result.get("password_error"):
+            break
+        if result.get("token_extracted"):
+            break
+        if attempt >= max_login_retries:
+            break
+        status = str(result.get("sign_status") or "")
+        reason = str(result.get("detail_reason") or "")
+        log(
+            f"account {args.account_index}: login/token not ready, retry "
+            f"{attempt + 1}/{max_login_retries}; status={status}; reason={reason[:160]}"
+        )
+        time.sleep(random.uniform(3, 7))
+
+    result = result or {}
     payload = build_output_payload(result, runtime, args.username, args.account_index)
     write_result(os.getenv("RESULT_JSON_PATH", "result.json"), payload)
-    return 0 if result.get("sign_success") else 1
+    if truthy(os.getenv("SECKILL_EXIT_ON_FAILURE", "false")) and not result.get("sign_success"):
+        return 1
+    return 0
 
 
 def run_self_test() -> int:

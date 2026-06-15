@@ -69,3 +69,9 @@ batches:
     target_keyword: "鼠标"
     schedule_mode: "dynamic"
     calibration_enabled: true
+  batch10:
+    group_number: 10
+    group_name: "seckill-test"
+    target_keyword: "鼠标"
+    schedule_mode: "fixed"
+    fixed_lead_ms: 500

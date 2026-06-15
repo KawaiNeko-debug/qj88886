@@ -6,6 +6,26 @@ on:
       batch_number:
         required: true
         type: number
+      relative_timing:
+        required: false
+        type: boolean
+        default: false
+      login_after_minutes:
+        required: false
+        type: number
+        default: 1
+      seckill_after_minutes:
+        required: false
+        type: number
+        default: 5
+      hard_stop_after_minutes:
+        required: false
+        type: number
+        default: 6
+      target_keyword:
+        required: false
+        type: string
+        default: ""
     secrets:
       ACCOUNTS_BATCH:
         required: true
@@ -67,21 +87,30 @@ jobs:
     outputs:
       matrix: ${{ steps.prepare.outputs.matrix }}
       count: ${{ steps.prepare.outputs.count }}
+      login_at: ${{ steps.prepare.outputs.login_at }}
+      seckill_at: ${{ steps.prepare.outputs.seckill_at }}
+      hard_stop_time: ${{ steps.prepare.outputs.hard_stop_time }}
     env:
       ACCOUNTS: ${{ secrets.ACCOUNTS_BATCH }}
+      RELATIVE_TIMING: ${{ inputs.relative_timing }}
+      LOGIN_AFTER_MINUTES: ${{ inputs.login_after_minutes }}
+      SECKILL_AFTER_MINUTES: ${{ inputs.seckill_after_minutes }}
+      HARD_STOP_AFTER_MINUTES: ${{ inputs.hard_stop_after_minutes }}
     steps:
       - id: prepare
-        name: Build 20-account matrix
+        name: Build account matrix
         shell: bash
         run: |
           python - <<'PY'
           import json
           import os
           import random
+          from datetime import datetime, timedelta
+          from zoneinfo import ZoneInfo
 
           lines = [line.strip() for line in os.environ.get("ACCOUNTS", "").splitlines() if line.strip()]
-          if len(lines) != 20:
-              print(f"::error title=ACCOUNTS_BATCH must contain 20 accounts::found {len(lines)}")
+          if not 1 <= len(lines) <= 20:
+              print(f"::error title=ACCOUNTS_BATCH must contain 1-20 accounts::found {len(lines)}")
               raise SystemExit(1)
 
           invalid = []
@@ -100,12 +129,33 @@ jobs:
                   print(f"::error title=invalid account line::{message}")
               raise SystemExit(1)
 
-          indexes = list(range(1, 21))
+          indexes = list(range(1, len(lines) + 1))
           random.shuffle(indexes)
           matrix = {"include": [{"account_index": idx, "execution_order": order} for order, idx in enumerate(indexes, 1)]}
+
+          def minutes_env(name, default):
+              try:
+                  return float(os.environ.get(name, default))
+              except Exception:
+                  return float(default)
+
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"matrix={json.dumps(matrix)}\n")
-              output.write("count=20\n")
+              output.write(f"count={len(lines)}\n")
+              if os.environ.get("RELATIVE_TIMING", "").lower() == "true":
+                  now = datetime.now(ZoneInfo("Asia/Shanghai"))
+                  login_after = max(0.0, minutes_env("LOGIN_AFTER_MINUTES", 1))
+                  seckill_after = max(0.1, minutes_env("SECKILL_AFTER_MINUTES", 5))
+                  hard_stop_after = max(seckill_after + 1.0, minutes_env("HARD_STOP_AFTER_MINUTES", 6))
+                  if login_after >= seckill_after:
+                      login_after = max(0.0, seckill_after - 1.0)
+                  login_at = (now + timedelta(minutes=login_after)).strftime("%H:%M:%S")
+                  seckill_at = (now + timedelta(minutes=seckill_after)).strftime("%H:%M:%S")
+                  hard_stop_time = (now + timedelta(minutes=hard_stop_after)).strftime("%H:%M:%S")
+                  output.write(f"login_at={login_at}\n")
+                  output.write(f"seckill_at={seckill_at}\n")
+                  output.write(f"hard_stop_time={hard_stop_time}\n")
+                  print(f"relative timing: login_at={login_at}, seckill_at={seckill_at}, hard_stop_time={hard_stop_time}")
           print("execution order: " + ", ".join(map(str, indexes)))
           PY
 
@@ -141,11 +191,15 @@ jobs:
       BROWSER_VIEWPORT_WIDTH: ${{ secrets.BROWSER_VIEWPORT_WIDTH }}
       BROWSER_VIEWPORT_HEIGHT: ${{ secrets.BROWSER_VIEWPORT_HEIGHT }}
       BROWSER_DEVICE_SCALE_FACTOR: ${{ secrets.BROWSER_DEVICE_SCALE_FACTOR }}
+      SECKILL_LOGIN_AT: ${{ needs.prepare.outputs.login_at }}
+      SECKILL_AT: ${{ needs.prepare.outputs.seckill_at }}
+      SECKILL_HARD_STOP_TIME: ${{ needs.prepare.outputs.hard_stop_time }}
+      SECKILL_TARGET_KEYWORD: ${{ inputs.target_keyword }}
       GROUP_NUMBER: ${{ inputs.batch_number }}
       GROUP_NAME: seckill-batch${{ inputs.batch_number }}
       ACCOUNT_INDEX: ${{ matrix.account_index }}
       EXECUTION_ORDER: ${{ matrix.execution_order }}
-      TOTAL_ACCOUNTS: "20"
+      TOTAL_ACCOUNTS: ${{ needs.prepare.outputs.count }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
