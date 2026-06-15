@@ -6,7 +6,9 @@ import math
 import os
 import random
 import statistics
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -267,6 +269,27 @@ def response_fingerprint(data: Any, http_status: int) -> str:
     return f"http={http_status} non-json"
 
 
+def go_sender_binary() -> Path | None:
+    configured = (os.getenv("SECKILL_GO_SENDER") or "").strip()
+    if configured:
+        path = Path(configured)
+        return path if path.exists() else None
+    suffix = ".exe" if os.name == "nt" else ""
+    for path in (H3_DIR / f"seckill_sender{suffix}", ROOT_DIR / f"seckill_sender{suffix}"):
+        if path.exists():
+            return path
+    return None
+
+
+def normalize_response_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    output: dict[str, int] = {}
+    for key, count in value.items():
+        output[str(key)] = safe_int(count, 0)
+    return output
+
+
 def prepare_legacy_env(config: dict[str, Any]):
     base_url = str(config.get("base_url") or os.getenv("SECKILL_BASE_URL") or os.getenv("BASE_URL") or "").strip()
     referer = str(config.get("referer") or os.getenv("SECKILL_REFERER") or os.getenv("REFERER") or "").strip()
@@ -478,6 +501,94 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 return []
             return [executor.submit(self.send_exchange_once) for _ in range(count)]
 
+        def run_go_seckill_window(self, prewarm_ms: float, formal_ms: float, active_end_ms: float, hard_stop_ms: float) -> bool:
+            mode = str(os.getenv("SECKILL_SENDER", "go") or "go").strip().lower()
+            if mode in {"python", "py"}:
+                log(f"account {self.account_index}: SECKILL_SENDER=python, using Python sender")
+                return False
+
+            binary = go_sender_binary()
+            if not binary:
+                log(f"account {self.account_index}: Go sender binary not found, using Python sender fallback")
+                return False
+
+            goods = runtime.target_goods or {}
+            detail_id = str(goods.get("voucherSeckillActivityDetailAccessId") or goods.get("goodsDetailAccessId") or "").strip()
+            payload = {
+                "goodsDetailAccessId": detail_id,
+                "categoryAccessId": self.category_access_id,
+                "source": self.source,
+            }
+            config_payload = {
+                "account_index": self.account_index,
+                "buy_url": self.buy_url,
+                "headers": dict(self.headers),
+                "payload": payload,
+                "prewarm_ms": int(round(prewarm_ms)),
+                "formal_ms": int(round(formal_ms)),
+                "active_end_ms": int(round(active_end_ms)),
+                "hard_stop_ms": int(round(hard_stop_ms)),
+                "prewarm_concurrency": safe_int(runtime.config.get("prewarm_concurrency"), 30),
+                "burst_concurrency": safe_int(runtime.config.get("burst_concurrency"), 120),
+                "burst_interval_ms": safe_int(runtime.config.get("burst_interval_ms"), 10),
+                "response_log_limit": safe_int(runtime.config.get("response_log_limit"), 50),
+                "response_log_every": safe_int(runtime.config.get("response_log_every"), 200),
+                "response_log_body_chars": safe_int(runtime.config.get("response_log_body_chars"), 500),
+                "disable_http2": truthy(os.getenv("SECKILL_GO_DISABLE_HTTP2", "false")),
+            }
+
+            temp_dir = Path(os.getenv("RUNNER_TEMP") or tempfile.gettempdir())
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            config_path = temp_dir / f"seckill-sender-{os.getpid()}-{self.account_index}.json"
+            output_path = temp_dir / f"seckill-sender-result-{os.getpid()}-{self.account_index}.json"
+            try:
+                with open(config_path, "w", encoding="utf-8") as file:
+                    json.dump(config_payload, file, ensure_ascii=False)
+                timeout_seconds = max(60, int(max(0, hard_stop_ms - now_ms()) / 1000) + 20)
+                log(
+                    f"account {self.account_index}: using Go sender "
+                    f"binary={binary} timeout={timeout_seconds}s"
+                )
+                completed = subprocess.run(
+                    [str(binary), "-config", str(config_path), "-output", str(output_path)],
+                    cwd=str(ROOT_DIR),
+                    timeout=timeout_seconds,
+                )
+                if completed.returncode != 0:
+                    log(f"account {self.account_index}: Go sender exited {completed.returncode}, using Python sender fallback")
+                    return False
+                if not output_path.exists():
+                    log(f"account {self.account_index}: Go sender result missing, using Python sender fallback")
+                    return False
+                with open(output_path, "r", encoding="utf-8") as file:
+                    result_payload = json.load(file)
+            except Exception as exc:
+                log(f"account {self.account_index}: Go sender failed: {type(exc).__name__}: {exc}; using Python sender fallback")
+                return False
+            finally:
+                for path in (config_path, output_path):
+                    try:
+                        path.unlink()
+                    except Exception:
+                        pass
+
+            runtime.attempts_sent = safe_int(result_payload.get("attempts_sent"), 0)
+            runtime.first_response = result_payload.get("first_response") if result_payload.get("first_response") is not None else {}
+            runtime.response_counts = normalize_response_counts(result_payload.get("response_counts"))
+            runtime.last_response_message = str(result_payload.get("last_response_message") or "")
+            if truthy(result_payload.get("success")):
+                runtime.success_response = result_payload.get("success_response") if result_payload.get("success_response") is not None else {}
+                runtime.success_sent_at = str(result_payload.get("success_sent_at") or "")
+                runtime.success_received_at = str(result_payload.get("success_received_at") or "")
+                runtime.stop_event.set()
+            else:
+                runtime.success_response = None
+            log(
+                f"account {self.account_index}: Go sender finished attempts={runtime.attempts_sent} "
+                f"success={bool(runtime.success_response)}"
+            )
+            return True
+
         def run_seckill_window(self):
             prewarm_count = safe_int(runtime.config.get("prewarm_concurrency"), 30)
             burst_count = safe_int(runtime.config.get("burst_concurrency"), 120)
@@ -493,6 +604,9 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 f"prewarm={datetime.fromtimestamp(prewarm_ms / 1000, LOCAL_TZ).strftime('%H:%M:%S.%f')[:-3]} "
                 f"formal={datetime.fromtimestamp(formal_ms / 1000, LOCAL_TZ).strftime('%H:%M:%S.%f')[:-3]}"
             )
+
+            if self.run_go_seckill_window(prewarm_ms, formal_ms, active_end_ms, hard_stop_ms):
+                return
 
             max_workers = max(prewarm_count, burst_count, 1)
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
