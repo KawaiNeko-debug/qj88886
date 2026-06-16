@@ -114,6 +114,8 @@ def normalize_record(row: dict, payload: dict) -> dict:
     group_number = safe_int(row.get("group_number") or payload.get("group_number"), 0)
     account_index = safe_int(row.get("account_index"), 0)
     rec = seckill_record(row)
+    diagnostics = row.get("runner_diagnostics") if isinstance(row.get("runner_diagnostics"), dict) else {}
+    login_attempts = row.get("login_attempts") if isinstance(row.get("login_attempts"), list) else []
     success = truthy(row.get("sign_success")) or truthy(rec.get("success"))
     status = str(row.get("sign_status") or ("秒杀成功" if success else "秒杀失败")).strip()
     reason = str(row.get("detail_reason") or rec.get("last_response_message") or status).strip()
@@ -123,6 +125,13 @@ def normalize_record(row: dict, payload: dict) -> dict:
         "group_name": row.get("group_name") or payload.get("group_name") or f"seckill-batch{group_number}",
         "group_position": row.get("group_position") or f"{group_number}组账号{account_index}",
         "username": row.get("username") or row.get("masked_username") or f"账号{account_index}",
+        "ga_job_started_at": diagnostics.get("ga_job_started_at") or "",
+        "ga_run_seckill_started_at": diagnostics.get("ga_run_seckill_started_at") or "",
+        "script_started_at": diagnostics.get("script_started_at") or "",
+        "login_started_at": row.get("login_started_at") or (login_attempts[0].get("started_at") if login_attempts and isinstance(login_attempts[0], dict) else ""),
+        "login_target": diagnostics.get("login_target") or "",
+        "seckill_target": diagnostics.get("seckill_target") or "",
+        "hard_stop_target": diagnostics.get("hard_stop_target") or "",
         "success": success,
         "status": status,
         "reason": reason,
@@ -134,6 +143,8 @@ def normalize_record(row: dict, payload: dict) -> dict:
         "sku_code": rec.get("sku_code") or "",
         "goods_detail_access_id": rec.get("goods_detail_access_id") or "",
         "schedule_mode": rec.get("schedule_mode") or "",
+        "calibration_source": rec.get("calibration_source") or "",
+        "time_is_successes": rec.get("time_is_successes") or "",
         "attempts_sent": safe_int(rec.get("attempts_sent"), 0),
         "median_rtt_ms": rec.get("median_rtt_ms"),
         "median_server_delta_ms": rec.get("median_server_delta_ms"),
@@ -169,6 +180,13 @@ def missing_record(group_number: int, account_index: int, username: str) -> dict
         "group_name": f"seckill-batch{group_number}",
         "group_position": f"{group_number}组账号{account_index}",
         "username": username,
+        "ga_job_started_at": "",
+        "ga_run_seckill_started_at": "",
+        "script_started_at": "",
+        "login_started_at": "",
+        "login_target": "",
+        "seckill_target": "",
+        "hard_stop_target": "",
         "success": False,
         "status": "未回传结果",
         "reason": "10:05 汇总时未下载到该账号结果",
@@ -180,6 +198,8 @@ def missing_record(group_number: int, account_index: int, username: str) -> dict
         "sku_code": "",
         "goods_detail_access_id": "",
         "schedule_mode": "",
+        "calibration_source": "",
+        "time_is_successes": "",
         "attempts_sent": 0,
         "median_rtt_ms": "",
         "median_server_delta_ms": "",
@@ -282,6 +302,15 @@ def write_xlsx(path: str, records: list[dict]):
         "服务器时差中位数(ms)",
         "成功发送时间",
         "成功返回时间",
+        "Runner到手时间",
+        "秒杀命令开始",
+        "脚本开始",
+        "首次登录开始",
+        "配置登录时间",
+        "配置秒杀时间",
+        "配置结束时间",
+        "校准来源",
+        "time.is成功次数",
     ]
     sheet.append(headers)
     header_fill = PatternFill("solid", fgColor="D9E2F3")
@@ -317,6 +346,15 @@ def write_xlsx(path: str, records: list[dict]):
             item.get("median_server_delta_ms", ""),
             item.get("success_sent_at", ""),
             item.get("success_received_at", ""),
+            item.get("ga_job_started_at", ""),
+            item.get("ga_run_seckill_started_at", ""),
+            item.get("script_started_at", ""),
+            item.get("login_started_at", ""),
+            item.get("login_target", ""),
+            item.get("seckill_target", ""),
+            item.get("hard_stop_target", ""),
+            item.get("calibration_source", ""),
+            item.get("time_is_successes", ""),
         ]
         sheet.append(row)
         row_index = sheet.max_row
@@ -347,6 +385,15 @@ def write_xlsx(path: str, records: list[dict]):
         "M": 22,
         "N": 28,
         "O": 28,
+        "P": 26,
+        "Q": 26,
+        "R": 26,
+        "S": 26,
+        "T": 26,
+        "U": 26,
+        "V": 26,
+        "W": 22,
+        "X": 16,
     }
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width

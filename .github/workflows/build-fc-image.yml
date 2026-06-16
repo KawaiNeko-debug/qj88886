@@ -88,7 +88,7 @@ jobs:
           grep -q 'golang:1.22' fc/Dockerfile
           grep -q 'COPY --from=go-builder' fc/Dockerfile
           grep -q 'INVOKE_TOKEN' fc/handler.py
-          grep -q '2026-06-16-invoke-token-v2' fc/handler.py
+          grep -q '2026-06-16-safe-timeout-v3' fc/handler.py
 
       - name: Build and push FC image
         id: image

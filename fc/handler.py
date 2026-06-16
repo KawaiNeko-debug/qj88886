@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
-HANDLER_VERSION = "2026-06-16-invoke-token-v2"
+HANDLER_VERSION = "2026-06-16-safe-timeout-v3"
 
 ALLOWED_ENV_KEYS = {
     "PASSPORT_URL",
@@ -205,6 +205,8 @@ def run_seckill(request_payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     env["GROUP_NAME"] = str(request_payload.get("group_name") or f"seckill-batch{batch_number}")
     env["ACCOUNT_INDEX"] = str(account_index)
     env["TOTAL_ACCOUNTS"] = str(total_accounts)
+    env["ACCOUNT_USERNAME"] = username
+    env["ACCOUNT_PASSWORD"] = password
     env["RUNNER_TEMP"] = tempfile.gettempdir()
     env.setdefault("JLC_BIND_TOKEN_ENABLED", "true")
 
@@ -227,19 +229,22 @@ def run_seckill(request_payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
     result_path = Path(tempfile.gettempdir()) / f"fc-seckill-result-{uuid.uuid4().hex}.json"
     env["RESULT_JSON_PATH"] = str(result_path)
 
-    timeout_seconds = safe_int(request_payload.get("timeout_seconds"), 0)
-    if timeout_seconds <= 0:
-        timeout_seconds = max(600, int(safe_float(request_payload.get("hard_stop_after_minutes"), 6.0) * 60) + 300)
+    derived_timeout_seconds = max(
+        180,
+        int(safe_float(request_payload.get("hard_stop_after_minutes"), 6.0) * 60) + safe_int(os.getenv("FC_SUBPROCESS_TIMEOUT_EXTRA_SECONDS"), 180),
+    )
+    requested_timeout_seconds = safe_int(request_payload.get("timeout_seconds"), 0)
+    timeout_seconds = (
+        min(requested_timeout_seconds, derived_timeout_seconds)
+        if requested_timeout_seconds > 0
+        else derived_timeout_seconds
+    )
 
     cmd = [
         sys.executable,
         str(ROOT_DIR / "h3" / "seckill.py"),
         "--batch",
         str(batch_number),
-        "--username",
-        username,
-        "--password",
-        password,
         "--account-index",
         str(account_index),
         "--total-accounts",
@@ -255,21 +260,11 @@ def run_seckill(request_payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             cmd,
             cwd=str(ROOT_DIR),
             env=env,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            capture_output=True,
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
-        output = (exc.stdout or "") + "\n" + (exc.stderr or "")
-        if output.strip():
-            print(output[-12000:], flush=True)
+        print(f"[fc] account={account_index}: subprocess timeout after {timeout_seconds}s", flush=True)
         return 200, build_failure_payload(request_payload, f"FC subprocess timeout after {timeout_seconds}s")
-
-    output = (completed.stdout or "") + "\n" + (completed.stderr or "")
-    if output.strip():
-        print(output[-20000:], flush=True)
 
     if not result_path.exists():
         return 200, build_failure_payload(

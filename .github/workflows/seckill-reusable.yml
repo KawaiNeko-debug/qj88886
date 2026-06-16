@@ -159,30 +159,8 @@ jobs:
           print("execution order: " + ", ".join(map(str, indexes)))
           PY
 
-  build_sender:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-
-      - name: Build Go seckill sender
-        run: go build -o h3/seckill_sender h3/seckill_sender.go
-
-      - name: Upload Go seckill sender
-        uses: actions/upload-artifact@v4
-        with:
-          name: seckill-sender-linux
-          path: h3/seckill_sender
-          if-no-files-found: error
-          retention-days: 2
-
   run:
-    needs: [prepare, build_sender]
+    needs: [prepare]
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     strategy:
@@ -226,14 +204,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Go seckill sender
-        uses: actions/download-artifact@v4
-        with:
-          name: seckill-sender-linux
-          path: h3
-
-      - name: Prepare Go seckill sender
-        run: chmod +x h3/seckill_sender
+      - name: Mark runner timing
+        shell: bash
+        run: |
+          now="$(date -Is)"
+          echo "GA_JOB_STARTED_AT=$now" >> "$GITHUB_ENV"
+          echo "runner acquired at $now"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -269,6 +245,24 @@ jobs:
               env_file.write("__ACCOUNT_PASSWORD__\n")
           print(f"selected account {index}; execution order {os.environ.get('EXECUTION_ORDER')}")
           PY
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build Go seckill sender
+        run: go build -o h3/seckill_sender h3/seckill_sender.go
+
+      - name: Prepare Go seckill sender
+        run: chmod +x h3/seckill_sender
+
+      - name: Mark seckill command start
+        shell: bash
+        run: |
+          now="$(date -Is)"
+          echo "GA_RUN_SECKILL_STARTED_AT=$now" >> "$GITHUB_ENV"
+          echo "run seckill command start at $now"
 
       - id: seckill
         name: Run seckill
@@ -336,8 +330,8 @@ jobs:
           retention-days: 2
 
   merge:
-    needs: [prepare, build_sender, run]
-    if: always() && needs.prepare.result == 'success' && needs.build_sender.result == 'success'
+    needs: [prepare, run]
+    if: always() && needs.prepare.result == 'success'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout

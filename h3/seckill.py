@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+import re
 import statistics
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -81,6 +83,86 @@ def parse_iso_ms(value: str) -> float | None:
         return None
 
 
+def parse_http_date_ms(value: str) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return parsedate_to_datetime(text).timestamp() * 1000.0
+    except Exception:
+        return None
+
+
+def parse_time_is_body_ms(text: str, reference_ms: float | None = None) -> tuple[float | None, str]:
+    body = str(text or "")
+    if not body:
+        return None, ""
+    reference = reference_ms if reference_ms is not None else now_ms()
+    candidates: list[tuple[float, str]] = []
+
+    for match in re.finditer(r"(?<!\d)(1[6-9]\d{11})(?!\d)", body):
+        value = float(match.group(1))
+        if abs(value - reference) <= 7 * 24 * 3600 * 1000:
+            candidates.append((value, "epoch_ms"))
+
+    for match in re.finditer(r"(?<!\d)(1[6-9]\d{8})(?:\.(\d{1,6}))?(?!\d)", body):
+        seconds = float(match.group(1))
+        fraction = match.group(2) or ""
+        value = seconds * 1000.0
+        if fraction:
+            value += float("0." + fraction) * 1000.0
+        if abs(value - reference) <= 7 * 24 * 3600 * 1000:
+            candidates.append((value, "epoch_seconds"))
+
+    for match in re.finditer(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", body):
+        value = parse_iso_ms(match.group(0))
+        if value is not None and abs(value - reference) <= 7 * 24 * 3600 * 1000:
+            candidates.append((value, "iso"))
+
+    if not candidates:
+        return None, ""
+    value, source = min(candidates, key=lambda item: abs(item[0] - reference))
+    return value, source
+
+
+def fetch_time_is_calibration(config: dict[str, Any]) -> tuple[Any, str]:
+    url = str(config.get("time_is_url") or "https://time.is/Unix_time_now").strip()
+    timeout = float(config.get("time_is_timeout_seconds") or 3.0)
+    max_rtt = safe_int(config.get("time_is_max_rtt_ms"), 2500)
+    headers = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "user-agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+        ),
+    }
+    local_start = now_ms()
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout)
+        local_end = now_ms()
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+    rtt = max(0.0, local_end - local_start)
+    if max_rtt > 0 and rtt > max_rtt:
+        return None, f"rtt too high: {rtt:.0f}ms"
+
+    midpoint = local_end - rtt / 2.0
+    server_ms, source = parse_time_is_body_ms(response.text, midpoint)
+    if server_ms is None:
+        server_ms = parse_http_date_ms(response.headers.get("Date", ""))
+        source = "http_date" if server_ms is not None else ""
+    if server_ms is None:
+        return None, f"no parseable time.is time; http={response.status_code}"
+
+    delta = server_ms - midpoint
+    return CalibrationSample(server_delta_ms=delta, rtt_ms=rtt, source=f"time.is:{source}"), (
+        f"http={response.status_code} source={source} rtt={rtt:.0f}ms delta={delta:.0f}ms"
+    )
+
+
 def today_at(time_text: str) -> datetime:
     hour, minute, second = [int(part) for part in str(time_text).split(":")]
     now = datetime.now(LOCAL_TZ)
@@ -142,6 +224,18 @@ def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         "SECKILL_RESPONSE_LOG_LIMIT": ("response_log_limit", int),
         "SECKILL_RESPONSE_LOG_EVERY": ("response_log_every", int),
         "SECKILL_RESPONSE_LOG_BODY_CHARS": ("response_log_body_chars", int),
+        "SECKILL_TIME_IS_ENABLED": ("time_is_enabled", str),
+        "TIME_IS_ENABLED": ("time_is_enabled", str),
+        "SECKILL_TIME_IS_PREFER": ("time_is_prefer", str),
+        "TIME_IS_PREFER": ("time_is_prefer", str),
+        "SECKILL_TIME_IS_URL": ("time_is_url", str),
+        "TIME_IS_URL": ("time_is_url", str),
+        "SECKILL_TIME_IS_SAMPLE_COUNT": ("time_is_sample_count", int),
+        "TIME_IS_SAMPLE_COUNT": ("time_is_sample_count", int),
+        "SECKILL_TIME_IS_TIMEOUT_SECONDS": ("time_is_timeout_seconds", float),
+        "TIME_IS_TIMEOUT_SECONDS": ("time_is_timeout_seconds", float),
+        "SECKILL_TIME_IS_MAX_RTT_MS": ("time_is_max_rtt_ms", int),
+        "TIME_IS_MAX_RTT_MS": ("time_is_max_rtt_ms", int),
     }
     for env_name, (key, caster) in mappings.items():
         raw = os.getenv(env_name)
@@ -180,6 +274,7 @@ def choose_goods(rows: list[dict[str, Any]], keyword: str) -> dict[str, Any] | N
 class CalibrationSample:
     server_delta_ms: float
     rtt_ms: float
+    source: str = "jlc"
 
 
 @dataclass
@@ -196,6 +291,9 @@ class SeckillRuntime:
     last_response_message: str = ""
     response_logs_emitted: int = 0
     response_counts: dict[str, int] = field(default_factory=dict)
+    time_is_attempts: int = 0
+    time_is_successes: int = 0
+    calibration_source: str = ""
     counter_lock: threading.Lock = field(default_factory=threading.Lock)
     stop_event: threading.Event = field(default_factory=threading.Event)
 
@@ -375,13 +473,25 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 return None
             body = data.get("data") if isinstance(data.get("data"), dict) else {}
             server_ms = parse_iso_ms(body.get("currentTime")) if isinstance(body, dict) else None
-            if server_ms is not None:
+            time_is_enabled = truthy(runtime.config.get("time_is_enabled", True))
+            time_is_prefer = truthy(runtime.config.get("time_is_prefer", True))
+            time_is_sample_count = max(0, safe_int(runtime.config.get("time_is_sample_count"), 5))
+            should_use_jlc_sample = (
+                not time_is_enabled
+                or not time_is_prefer
+                or (
+                    runtime.time_is_successes <= 0
+                    and runtime.time_is_attempts >= time_is_sample_count
+                )
+            )
+            if server_ms is not None and should_use_jlc_sample:
                 rtt = max(0.0, local_end - local_start)
                 delta = server_ms - (local_end - rtt / 2.0)
-                runtime.add_sample(CalibrationSample(server_delta_ms=delta, rtt_ms=rtt))
+                runtime.add_sample(CalibrationSample(server_delta_ms=delta, rtt_ms=rtt, source="jlc"))
+                runtime.calibration_source = "jlc"
                 log(
                     f"account {self.account_index} {tag}: rtt={rtt:.0f}ms "
-                    f"delta={delta:.0f}ms samples={len(runtime.samples)}"
+                    f"delta={delta:.0f}ms source=jlc samples={len(runtime.samples)}"
                 )
             rows = normalize_goods_payload(data)
             target = choose_goods(rows, str(runtime.config.get("target_keyword") or ""))
@@ -413,14 +523,49 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
             )
             return False
 
+        def fetch_time_is_once(self, tag: str = "time.is") -> bool:
+            if not truthy(runtime.config.get("time_is_enabled", True)):
+                return False
+            sample_limit = max(0, safe_int(runtime.config.get("time_is_sample_count"), 5))
+            if sample_limit and runtime.time_is_attempts >= sample_limit:
+                return False
+            runtime.time_is_attempts += 1
+            sample, detail = fetch_time_is_calibration(runtime.config)
+            if isinstance(sample, CalibrationSample):
+                runtime.add_sample(sample)
+                runtime.time_is_successes += 1
+                runtime.calibration_source = sample.source
+                log(
+                    f"account {self.account_index} {tag}: {detail} "
+                    f"samples={len(runtime.samples)}"
+                )
+                return True
+            log(f"account {self.account_index} {tag}: failed {detail}")
+            return False
+
         def calibrate_until(self, deadline_ms: float):
-            if str(runtime.config.get("schedule_mode")).lower() != "dynamic":
-                return
-            if not truthy(runtime.config.get("calibration_enabled", True)):
+            mode = str(runtime.config.get("schedule_mode")).lower()
+            time_is_enabled = truthy(runtime.config.get("time_is_enabled", True))
+            calibration_enabled = truthy(runtime.config.get("calibration_enabled", True))
+            if mode != "dynamic" and not time_is_enabled:
                 return
             interval_ms = safe_int(runtime.config.get("calibration_interval_ms"), 1500)
             while now_ms() < deadline_ms and not runtime.stop_event.is_set():
-                self.fetch_goods_once("calibrate")
+                did_work = False
+                if time_is_enabled:
+                    did_work = self.fetch_time_is_once("time.is") or did_work
+                if mode == "dynamic" and calibration_enabled:
+                    self.fetch_goods_once("calibrate")
+                    did_work = True
+                elif not runtime.target_goods:
+                    self.fetch_goods_once("calibrate-goods")
+                    did_work = True
+                sample_limit = max(0, safe_int(runtime.config.get("time_is_sample_count"), 5))
+                enough_time_is = (not time_is_enabled) or (sample_limit and runtime.time_is_attempts >= sample_limit)
+                if enough_time_is and runtime.target_goods and (mode != "dynamic" or runtime.median_delta() is not None):
+                    break
+                if not did_work:
+                    break
                 remaining = deadline_ms - now_ms()
                 if remaining <= 0:
                     break
@@ -437,11 +582,23 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 prewarm_ms = start_server_ms - delta - (rtt / 2.0) - arrival_lead
                 formal_ms = start_server_ms - delta - (rtt / 2.0)
                 active_end_ms = active_end_server_ms - delta - (rtt / 2.0)
-                detail = f"dynamic delta={delta:.0f}ms rtt={rtt:.0f}ms arrival_lead={arrival_lead}ms"
+                detail = (
+                    f"dynamic delta={delta:.0f}ms rtt={rtt:.0f}ms "
+                    f"arrival_lead={arrival_lead}ms source={runtime.calibration_source or 'sample'}"
+                )
                 return prewarm_ms, formal_ms, active_end_ms, detail
 
             fixed_lead = safe_int(runtime.config.get("fixed_lead_ms"), 500)
             start_local_ms = epoch_ms(today_at(str(runtime.config.get("seckill_at") or "10:00:00")))
+            if runtime.median_delta() is not None:
+                delta = float(runtime.median_delta() or 0.0)
+                formal_ms = start_local_ms - delta
+                return (
+                    formal_ms - fixed_lead,
+                    formal_ms,
+                    formal_ms + safe_int(runtime.config.get("active_window_ms"), 3000),
+                    f"fixed lead={fixed_lead}ms delta={delta:.0f}ms source={runtime.calibration_source or 'sample'}",
+                )
             return (
                 start_local_ms - fixed_lead,
                 start_local_ms,
@@ -664,6 +821,9 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 "last_response_message": runtime.last_response_message,
                 "response_counts": runtime.response_counts,
                 "calibration_samples": len(runtime.samples),
+                "calibration_source": runtime.calibration_source,
+                "time_is_attempts": runtime.time_is_attempts,
+                "time_is_successes": runtime.time_is_successes,
                 "median_server_delta_ms": runtime.median_delta(),
                 "median_rtt_ms": runtime.median_rtt(),
             }
@@ -727,8 +887,58 @@ def write_result(path: str, payload: dict[str, Any]):
 
 
 def run_live(args) -> int:
+    script_started_at = datetime.now(LOCAL_TZ)
     config = load_config(args.config, args.batch)
     login_target = today_at(str(config.get("login_at") or "09:50:00"))
+    seckill_target = today_at(str(config.get("seckill_at") or "10:00:00"))
+    hard_stop_target = today_at(str(config.get("hard_stop_time") or "10:01:00"))
+    diagnostics = {
+        "ga_job_started_at": os.getenv("GA_JOB_STARTED_AT", ""),
+        "ga_run_seckill_started_at": os.getenv("GA_RUN_SECKILL_STARTED_AT", ""),
+        "script_started_at": script_started_at.isoformat(),
+        "login_target": login_target.isoformat(),
+        "seckill_target": seckill_target.isoformat(),
+        "hard_stop_target": hard_stop_target.isoformat(),
+    }
+    log(
+        "schedule diagnostics: "
+        f"job_started={diagnostics['ga_job_started_at'] or '-'} "
+        f"command_started={diagnostics['ga_run_seckill_started_at'] or '-'} "
+        f"script_started={script_started_at.strftime('%H:%M:%S')} "
+        f"login_at={login_target.strftime('%H:%M:%S')} "
+        f"seckill_at={seckill_target.strftime('%H:%M:%S')} "
+        f"hard_stop={hard_stop_target.strftime('%H:%M:%S')}"
+    )
+    if truthy(os.getenv("SECKILL_SKIP_LATE_START", "true")) and script_started_at >= hard_stop_target:
+        reason = (
+            f"账号脚本启动过晚：script_started={script_started_at.strftime('%H:%M:%S')} "
+            f"已超过 hard_stop={hard_stop_target.strftime('%H:%M:%S')}"
+        )
+        result = {
+            "account_index": args.account_index,
+            "username": args.username,
+            "masked_username": mask_account(args.username),
+            "sign_status": "账号脚本启动过晚",
+            "sign_success": False,
+            "has_reward": False,
+            "password_error": False,
+            "risk_controlled": False,
+            "retry_count": 0,
+            "is_final_retry": False,
+            "token_extracted": False,
+            "secretkey_extracted": False,
+            "detail_reason": reason,
+            "sign_time": "",
+            "sign_ip": "",
+            "runner_diagnostics": diagnostics,
+            "login_started_at": "",
+            "activity_records": {"seckill": [], "lottery": []},
+        }
+        log(reason)
+        payload = build_output_payload(result, SeckillRuntime(config=config), args.username, args.account_index)
+        write_result(os.getenv("RESULT_JSON_PATH", "result.json"), payload)
+        return 0
+
     if datetime.now(LOCAL_TZ) < login_target:
         log(f"waiting until login time {login_target.strftime('%H:%M:%S')}")
         wait_until_ms(epoch_ms(login_target), "login")
@@ -738,8 +948,10 @@ def run_live(args) -> int:
     install_seckill_client(legacy, runtime)
 
     result = None
+    login_attempts = []
     max_login_retries = max(0, safe_int(os.getenv("LOGIN_MAX_RETRIES"), 3))
     for attempt in range(max_login_retries + 1):
+        attempt_started_at = datetime.now(LOCAL_TZ)
         result = legacy.sign_in_account(
             args.username,
             args.password,
@@ -747,6 +959,14 @@ def run_live(args) -> int:
             args.total_accounts,
             retry_count=attempt,
             is_final_retry=attempt >= max_login_retries,
+        )
+        login_attempts.append(
+            {
+                "attempt": attempt,
+                "started_at": attempt_started_at.isoformat(),
+                "finished_at": datetime.now(LOCAL_TZ).isoformat(),
+                "status": result.get("sign_status") if isinstance(result, dict) else "",
+            }
         )
         if result.get("password_error"):
             break
@@ -763,6 +983,9 @@ def run_live(args) -> int:
         time.sleep(random.uniform(3, 7))
 
     result = result or {}
+    result["runner_diagnostics"] = diagnostics
+    result["login_attempts"] = login_attempts
+    result["login_started_at"] = login_attempts[0]["started_at"] if login_attempts else ""
     payload = build_output_payload(result, runtime, args.username, args.account_index)
     write_result(os.getenv("RESULT_JSON_PATH", "result.json"), payload)
     if truthy(os.getenv("SECKILL_EXIT_ON_FAILURE", "false")) and not result.get("sign_success"):

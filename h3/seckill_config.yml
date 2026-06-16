@@ -11,6 +11,12 @@ defaults:
   fixed_lead_ms: 500
   calibration_interval_ms: 1500
   calibration_sample_size: 15
+  time_is_enabled: true
+  time_is_prefer: true
+  time_is_url: "https://time.is/Unix_time_now"
+  time_is_sample_count: 5
+  time_is_timeout_seconds: 3
+  time_is_max_rtt_ms: 2500
   response_log_limit: 50
   response_log_every: 200
   response_log_body_chars: 500
