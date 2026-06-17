@@ -30,97 +30,97 @@ batches:
   batch1:
     group_number: 1
     group_name: "seckill-batch1"
-    target_keyword: "耳机"
+    target_keyword: "万用表"
     schedule_mode: "fixed"
     fixed_lead_ms: 500
   batch2:
     group_number: 2
     group_name: "seckill-batch2"
-    target_keyword: "耳机"
+    target_keyword: "万用表"
     schedule_mode: "fixed"
     fixed_lead_ms: 500
   batch3:
     group_number: 3
     group_name: "seckill-batch3"
-    target_keyword: "耳机"
+    target_keyword: "万用表"
     schedule_mode: "fixed"
     fixed_lead_ms: 500
   batch4:
     group_number: 4
     group_name: "seckill-batch4"
-    target_keyword: "垫靠背椅"
+    target_keyword: "空气炸锅"
     schedule_mode: "fixed"
     fixed_lead_ms: 500
   batch5:
     group_number: 5
     group_name: "seckill-batch5"
-    target_keyword: "垫靠背椅"
+    target_keyword: "空气炸锅"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch6:
     group_number: 6
     group_name: "seckill-batch6"
-    target_keyword: "垫靠背椅"
+    target_keyword: "空气炸锅"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch7:
     group_number: 7
     group_name: "seckill-batch7"
-    target_keyword: ""
+    target_keyword: "折叠椅"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch8:
     group_number: 8
     group_name: "seckill-batch8"
-    target_keyword: "棉腰靠"
+    target_keyword: "折叠椅"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch9:
     group_number: 9
     group_name: "seckill-batch9"
-    target_keyword: "棉腰靠"
+    target_keyword: "折叠椅"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch10:
     group_number: 10
     group_name: "seckill-batch10"
     seckill_enabled: true
-    target_keyword: ""
+    target_keyword: "养生壶"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch11:
     group_number: 11
     group_name: "seckill-batch11"
     seckill_enabled: true
-    target_keyword: ""
+    target_keyword: "养生壶"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch12:
     group_number: 12
     group_name: "seckill-batch12"
     seckill_enabled: true
-    target_keyword: ""
+    target_keyword: "养生壶"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch13:
     group_number: 13
     group_name: "seckill-batch13"
     seckill_enabled: true
-    target_keyword: ""
+    target_keyword: "鼠标"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch14:
     group_number: 14
     group_name: "seckill-batch14"
     seckill_enabled: true
-    target_keyword: ""
+    target_keyword: "鼠标"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch15:
     group_number: 15
     group_name: "seckill-batch15"
     seckill_enabled: true
-    target_keyword: ""
+    target_keyword: "鼠标"
     schedule_mode: "dynamic"
     calibration_enabled: true
   batch16:
