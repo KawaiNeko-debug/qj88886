@@ -116,6 +116,7 @@ def normalize_record(row: dict, payload: dict) -> dict:
     rec = seckill_record(row)
     diagnostics = row.get("runner_diagnostics") if isinstance(row.get("runner_diagnostics"), dict) else {}
     login_attempts = row.get("login_attempts") if isinstance(row.get("login_attempts"), list) else []
+    cookie_count_raw = row.get("cookie_count") if row.get("cookie_count") is not None else rec.get("auth_cookie_count")
     success = truthy(row.get("sign_success")) or truthy(rec.get("success"))
     status = str(row.get("sign_status") or ("秒杀成功" if success else "秒杀失败")).strip()
     reason = str(row.get("detail_reason") or rec.get("last_response_message") or status).strip()
@@ -150,8 +151,18 @@ def normalize_record(row: dict, payload: dict) -> dict:
         "median_server_delta_ms": rec.get("median_server_delta_ms"),
         "success_sent_at": rec.get("success_sent_at") or "",
         "success_received_at": rec.get("success_received_at") or "",
+        "token_extracted": truthy(row.get("token_extracted")),
+        "secretkey_extracted": truthy(row.get("secretkey_extracted")),
+        "m_site_token_bound": truthy(row.get("m_site_token_bound")) or truthy(rec.get("m_site_token_bound")),
+        "cookie_count": safe_int(cookie_count_raw, 0),
+        "cookie_attached_to_api": truthy(row.get("cookie_attached_to_api")) or truthy(rec.get("auth_cookie_attached")),
+        "response_401_count": safe_int(rec.get("response_401_count"), 0),
+        "response_401_ratio": rec.get("response_401_ratio") if rec.get("response_401_ratio") != "" else "",
+        "auth_warning": rec.get("auth_warning") or "",
         "response_counts": rec.get("response_counts") if isinstance(rec.get("response_counts"), dict) else {},
         "first_response": rec.get("first_response") if isinstance(rec.get("first_response"), dict) else {},
+        "first_401_response": rec.get("first_401_response") if isinstance(rec.get("first_401_response"), dict) else {},
+        "first_non_401_response": rec.get("first_non_401_response") if isinstance(rec.get("first_non_401_response"), dict) else {},
         "success_response": rec.get("success_response") if isinstance(rec.get("success_response"), dict) else {},
     }
 
@@ -205,8 +216,18 @@ def missing_record(group_number: int, account_index: int, username: str) -> dict
         "median_server_delta_ms": "",
         "success_sent_at": "",
         "success_received_at": "",
+        "token_extracted": False,
+        "secretkey_extracted": False,
+        "m_site_token_bound": False,
+        "cookie_count": 0,
+        "cookie_attached_to_api": False,
+        "response_401_count": 0,
+        "response_401_ratio": "",
+        "auth_warning": "",
         "response_counts": {},
         "first_response": {},
+        "first_401_response": {},
+        "first_non_401_response": {},
         "success_response": {},
     }
 
@@ -311,6 +332,14 @@ def write_xlsx(path: str, records: list[dict]):
         "配置结束时间",
         "校准来源",
         "time.is成功次数",
+        "token提取",
+        "secretkey提取",
+        "m站绑定",
+        "Cookie数量",
+        "Cookie已带入发包",
+        "401次数",
+        "401占比",
+        "认证诊断",
     ]
     sheet.append(headers)
     header_fill = PatternFill("solid", fgColor="D9E2F3")
@@ -355,9 +384,20 @@ def write_xlsx(path: str, records: list[dict]):
             item.get("hard_stop_target", ""),
             item.get("calibration_source", ""),
             item.get("time_is_successes", ""),
+            "是" if item.get("token_extracted") else "否",
+            "是" if item.get("secretkey_extracted") else "否",
+            "是" if item.get("m_site_token_bound") else "否",
+            item.get("cookie_count", 0),
+            "是" if item.get("cookie_attached_to_api") else "否",
+            item.get("response_401_count", 0),
+            item.get("response_401_ratio", ""),
+            item.get("auth_warning", ""),
         ]
         sheet.append(row)
         row_index = sheet.max_row
+        ratio_cell = sheet.cell(row_index, 31)
+        if isinstance(item.get("response_401_ratio"), (int, float)):
+            ratio_cell.number_format = "0.00%"
         for cell in sheet[row_index]:
             cell.border = border
             cell.alignment = Alignment(vertical="center", wrap_text=True)
@@ -394,6 +434,14 @@ def write_xlsx(path: str, records: list[dict]):
         "V": 26,
         "W": 22,
         "X": 16,
+        "Y": 12,
+        "Z": 16,
+        "AA": 12,
+        "AB": 12,
+        "AC": 16,
+        "AD": 12,
+        "AE": 12,
+        "AF": 42,
     }
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
@@ -409,6 +457,8 @@ def write_xlsx(path: str, records: list[dict]):
         "占比",
         "返回摘要",
         "首次返回",
+        "首个401返回",
+        "首个非401返回",
         "成功返回",
     ]
     stats_sheet.append(stats_headers)
@@ -445,6 +495,8 @@ def write_xlsx(path: str, records: list[dict]):
                     ratio,
                     cell_text(summary, 1200),
                     cell_text(item.get("first_response"), 1600) if first_row_for_account else "",
+                    cell_text(item.get("first_401_response"), 1600) if first_row_for_account else "",
+                    cell_text(item.get("first_non_401_response"), 1600) if first_row_for_account else "",
                     cell_text(item.get("success_response"), 1600) if first_row_for_account and item.get("success_response") else "",
                 ]
             )
@@ -460,6 +512,8 @@ def write_xlsx(path: str, records: list[dict]):
     if truncated:
         stats_sheet.append(
             [
+                "",
+                "",
                 "",
                 "",
                 "",
@@ -485,6 +539,8 @@ def write_xlsx(path: str, records: list[dict]):
         "H": 90,
         "I": 70,
         "J": 70,
+        "K": 70,
+        "L": 70,
     }
     for column, width in stats_widths.items():
         stats_sheet.column_dimensions[column].width = width

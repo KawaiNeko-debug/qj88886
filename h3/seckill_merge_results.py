@@ -49,6 +49,18 @@ def score(row: dict):
     )
 
 
+PRESERVED_RESULT_FIELDS = (
+    "runner_diagnostics",
+    "login_started_at",
+    "login_attempts",
+    "token_extracted",
+    "secretkey_extracted",
+    "m_site_token_bound",
+    "cookie_count",
+    "cookie_attached_to_api",
+)
+
+
 def main():
     results_dir = sys.argv[1] if len(sys.argv) > 1 else "artifacts"
     output_path = sys.argv[2] if len(sys.argv) > 2 else "merged/result.json"
@@ -74,28 +86,30 @@ def main():
     normalized = []
     for row in rows:
         account_index = safe_int(row.get("account_index"), 0)
-        normalized.append(
-            {
-                "account_index": account_index,
-                "execution_order": safe_int(row.get("execution_order"), account_index),
-                "username": row.get("masked_username") or row.get("username") or f"账号{account_index}",
-                "group_name": row.get("group_name") or group_name,
-                "group_number": safe_int(row.get("group_number"), group_number),
-                "group_position": row.get("group_position") or f"{group_number}组账号{account_index}",
-                "sign_success": truthy(row.get("sign_success")),
-                "sign_status": row.get("sign_status") or "",
-                "has_reward": truthy(row.get("has_reward")),
-                "password_error": truthy(row.get("password_error")),
-                "risk_controlled": truthy(row.get("risk_controlled")),
-                "retry_count": safe_int(row.get("retry_count"), 0),
-                "is_final_retry": truthy(row.get("is_final_retry")),
-                "detail_reason": row.get("detail_reason") or "",
-                "sign_time": row.get("sign_time") or "",
-                "sign_ip": row.get("sign_ip") or "",
-                "sign_completed_at": row.get("sign_completed_at") or "",
-                "activity_records": row.get("activity_records") or {"seckill": []},
-            }
-        )
+        normalized_row = {
+            "account_index": account_index,
+            "execution_order": safe_int(row.get("execution_order"), account_index),
+            "username": row.get("masked_username") or row.get("username") or f"账号{account_index}",
+            "group_name": row.get("group_name") or group_name,
+            "group_number": safe_int(row.get("group_number"), group_number),
+            "group_position": row.get("group_position") or f"{group_number}组账号{account_index}",
+            "sign_success": truthy(row.get("sign_success")),
+            "sign_status": row.get("sign_status") or "",
+            "has_reward": truthy(row.get("has_reward")),
+            "password_error": truthy(row.get("password_error")),
+            "risk_controlled": truthy(row.get("risk_controlled")),
+            "retry_count": safe_int(row.get("retry_count"), 0),
+            "is_final_retry": truthy(row.get("is_final_retry")),
+            "detail_reason": row.get("detail_reason") or "",
+            "sign_time": row.get("sign_time") or "",
+            "sign_ip": row.get("sign_ip") or "",
+            "sign_completed_at": row.get("sign_completed_at") or "",
+            "activity_records": row.get("activity_records") or {"seckill": []},
+        }
+        for field_name in PRESERVED_RESULT_FIELDS:
+            if field_name in row:
+                normalized_row[field_name] = row[field_name]
+        normalized.append(normalized_row)
 
     payload = {
         "generated_at": datetime.now(LOCAL_TZ).isoformat(),

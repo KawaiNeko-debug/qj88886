@@ -17,6 +17,8 @@ defaults:
   time_is_sample_count: 5
   time_is_timeout_seconds: 3
   time_is_max_rtt_ms: 2500
+  rebind_before_seckill: true
+  rebind_before_seckill_min_gap_ms: 2000
   response_log_limit: 50
   response_log_every: 200
   response_log_body_chars: 500

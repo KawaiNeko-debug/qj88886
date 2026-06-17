@@ -236,6 +236,10 @@ def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         "TIME_IS_TIMEOUT_SECONDS": ("time_is_timeout_seconds", float),
         "SECKILL_TIME_IS_MAX_RTT_MS": ("time_is_max_rtt_ms", int),
         "TIME_IS_MAX_RTT_MS": ("time_is_max_rtt_ms", int),
+        "SECKILL_REBIND_BEFORE_SECKILL": ("rebind_before_seckill", str),
+        "JLC_REBIND_BEFORE_SECKILL": ("rebind_before_seckill", str),
+        "SECKILL_REBIND_MIN_GAP_MS": ("rebind_before_seckill_min_gap_ms", int),
+        "JLC_REBIND_MIN_GAP_MS": ("rebind_before_seckill_min_gap_ms", int),
     }
     for env_name, (key, caster) in mappings.items():
         raw = os.getenv(env_name)
@@ -285,6 +289,8 @@ class SeckillRuntime:
     samples: list[CalibrationSample] = field(default_factory=list)
     attempts_sent: int = 0
     first_response: dict[str, Any] | None = None
+    first_401_response: dict[str, Any] | None = None
+    first_non_401_response: dict[str, Any] | None = None
     success_response: dict[str, Any] | None = None
     success_sent_at: str = ""
     success_received_at: str = ""
@@ -365,6 +371,32 @@ def response_fingerprint(data: Any, http_status: int) -> str:
             f"success={data.get('success')} msg={safe_message(data)[:160]}"
         )
     return f"http={http_status} non-json"
+
+def is_401_fingerprint(text: str) -> bool:
+    value = str(text or "")
+    return "http=401" in value or "code=401" in value or "未登录" in value or "会话失效" in value
+
+def is_401_response(data: Any, http_status: int) -> bool:
+    if http_status == 401:
+        return True
+    if not isinstance(data, dict):
+        return False
+    if str(data.get("code") or "").strip() == "401":
+        return True
+    message = safe_message(data)
+    return "未登录" in message or "会话失效" in message
+
+def auth_warning_from_counts(counts: dict[str, int]) -> str:
+    if not counts:
+        return ""
+    total = sum(safe_int(v, 0) for v in counts.values())
+    count_401 = sum(safe_int(v, 0) for k, v in counts.items() if is_401_fingerprint(k))
+    non_401 = total - count_401
+    if count_401 and non_401:
+        return "同账号同时出现401和非401，疑似部分网关未识别会话/Cookie"
+    if count_401:
+        return "返回以401为主，疑似登录态或m站会话无效"
+    return ""
 
 
 def go_sender_binary() -> Path | None:
@@ -628,6 +660,11 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 if runtime.first_response is None:
                     runtime.first_response = data if isinstance(data, dict) else {"raw": text[:500]}
                     should_log = True
+                if is_401_response(data, http_status):
+                    if runtime.first_401_response is None:
+                        runtime.first_401_response = data if isinstance(data, dict) else {"raw": text[:500]}
+                elif http_status > 0 and runtime.first_non_401_response is None:
+                    runtime.first_non_401_response = data if isinstance(data, dict) else {"raw": text[:500]}
                 if isinstance(data, dict):
                     runtime.last_response_message = safe_message(data)
                 log_limit = max(0, safe_int(runtime.config.get("response_log_limit"), 50))
@@ -731,6 +768,12 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
 
             runtime.attempts_sent = safe_int(result_payload.get("attempts_sent"), 0)
             runtime.first_response = result_payload.get("first_response") if result_payload.get("first_response") is not None else {}
+            runtime.first_401_response = (
+                result_payload.get("first_401_response") if result_payload.get("first_401_response") is not None else {}
+            )
+            runtime.first_non_401_response = (
+                result_payload.get("first_non_401_response") if result_payload.get("first_non_401_response") is not None else {}
+            )
             runtime.response_counts = normalize_response_counts(result_payload.get("response_counts"))
             runtime.last_response_message = str(result_payload.get("last_response_message") or "")
             if truthy(result_payload.get("success")):
@@ -756,6 +799,18 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
             calibration_deadline = min(prewarm_ms - 100, hard_stop_ms)
             self.calibrate_until(calibration_deadline)
             prewarm_ms, formal_ms, active_end_ms, detail = self.schedule_times()
+
+            if truthy(runtime.config.get("rebind_before_seckill", True)):
+                min_gap = safe_int(runtime.config.get("rebind_before_seckill_min_gap_ms"), 2000)
+                if now_ms() <= prewarm_ms - min_gap and hasattr(self, "rebind_m_site_token"):
+                    self.rebind_m_site_token("before-seckill")
+                elif hasattr(self, "refresh_browser_cookies"):
+                    self.refresh_browser_cookies(log_status=True)
+                    log(
+                        f"account {self.account_index}: skip before-seckill rebind "
+                        f"time_to_prewarm={prewarm_ms - now_ms():.0f}ms min_gap={min_gap}ms"
+                    )
+
             log(
                 f"account {self.account_index}: schedule {detail}; "
                 f"prewarm={datetime.fromtimestamp(prewarm_ms / 1000, LOCAL_TZ).strftime('%H:%M:%S.%f')[:-3]} "
@@ -803,6 +858,12 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
         def build_record(self) -> dict[str, Any]:
             goods = runtime.target_goods or {}
             success = runtime.success_response is not None
+            response_401_count = sum(
+                safe_int(count, 0)
+                for key, count in runtime.response_counts.items()
+                if is_401_fingerprint(key)
+            )
+            response_total = sum(safe_int(count, 0) for count in runtime.response_counts.values())
             return {
                 "title": str(goods.get("skuTitle") or "").strip(),
                 "sku_code": str(goods.get("skuCode") or "").strip(),
@@ -817,9 +878,17 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 "success_sent_at": runtime.success_sent_at,
                 "success_received_at": runtime.success_received_at,
                 "first_response": runtime.first_response or {},
+                "first_401_response": runtime.first_401_response or {},
+                "first_non_401_response": runtime.first_non_401_response or {},
                 "success_response": runtime.success_response or {},
                 "last_response_message": runtime.last_response_message,
                 "response_counts": runtime.response_counts,
+                "response_401_count": response_401_count,
+                "response_401_ratio": (response_401_count / response_total) if response_total else "",
+                "auth_warning": auth_warning_from_counts(runtime.response_counts),
+                "m_site_token_bound": bool(getattr(self, "m_site_token_bound", False)),
+                "auth_cookie_count": safe_int(getattr(self, "cookie_count", 0), 0),
+                "auth_cookie_attached": bool(getattr(self, "cookie_attached_to_api", False)),
                 "calibration_samples": len(runtime.samples),
                 "calibration_source": runtime.calibration_source,
                 "time_is_attempts": runtime.time_is_attempts,

@@ -20,7 +20,7 @@ type SenderConfig struct {
 	AccountIndex         int               `json:"account_index"`
 	BuyURL               string            `json:"buy_url"`
 	Headers              map[string]string `json:"headers"`
-	Payload              map[string]any    `json:"payload"`
+	Payload              map[string]any     `json:"payload"`
 	PrewarmMs            int64             `json:"prewarm_ms"`
 	FormalMs             int64             `json:"formal_ms"`
 	ActiveEndMs          int64             `json:"active_end_ms"`
@@ -35,14 +35,14 @@ type SenderConfig struct {
 }
 
 type SenderResult struct {
-	AttemptsSent        int64          `json:"attempts_sent"`
-	Success             bool           `json:"success"`
-	SuccessSentAt       string         `json:"success_sent_at"`
-	SuccessReceivedAt   string         `json:"success_received_at"`
-	FirstResponse       any            `json:"first_response"`
-	First401Response    any            `json:"first_401_response"`
-	FirstNon401Response any            `json:"first_non_401_response"`
-	SuccessResponse     any            `json:"success_response"`
+	AttemptsSent       int64          `json:"attempts_sent"`
+	Success            bool           `json:"success"`
+	SuccessSentAt      string         `json:"success_sent_at"`
+	SuccessReceivedAt  string         `json:"success_received_at"`
+	FirstResponse      any            `json:"first_response"`
+	First401Response   any            `json:"first_401_response"`
+	FirstNon401Response any           `json:"first_non_401_response"`
+	SuccessResponse    any            `json:"success_response"`
 	LastResponseMessage string         `json:"last_response_message"`
 	ResponseCounts      map[string]int `json:"response_counts"`
 }
@@ -377,14 +377,14 @@ func (s *senderState) run() SenderResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return SenderResult{
-		AttemptsSent:        s.attempts.Load(),
-		Success:             s.successResponse != nil,
-		SuccessSentAt:       s.successSentAt,
-		SuccessReceivedAt:   s.successReceivedAt,
-		FirstResponse:       s.firstResponse,
-		First401Response:    s.first401Response,
+		AttemptsSent:       s.attempts.Load(),
+		Success:            s.successResponse != nil,
+		SuccessSentAt:      s.successSentAt,
+		SuccessReceivedAt:  s.successReceivedAt,
+		FirstResponse:      s.firstResponse,
+		First401Response:   s.first401Response,
 		FirstNon401Response: s.firstNon401Response,
-		SuccessResponse:     s.successResponse,
+		SuccessResponse:    s.successResponse,
 		LastResponseMessage: s.lastResponseMessage,
 		ResponseCounts:      s.responseCounts,
 	}

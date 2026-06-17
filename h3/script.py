@@ -484,6 +484,37 @@ def wait_token_from_requests(token_holder, timeout=8):
         time.sleep(0.2)
     return None
 
+def jlc_cookie_diagnostics(page: Page) -> tuple[str, int, str]:
+    try:
+        cookies = page.context.cookies([BASE_URL.rstrip("/")])
+    except Exception:
+        try:
+            cookies = page.context.cookies()
+        except Exception:
+            return "", 0, ""
+
+    parts = []
+    xsrf = ""
+    seen = set()
+    for item in cookies:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        value = str(item.get("value") or "")
+        domain = str(item.get("domain") or "").lstrip(".").lower()
+        if not name or not value:
+            continue
+        if domain and not (domain == "jlc.com" or domain.endswith(".jlc.com") or domain == parsed_base.hostname):
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(f"{name}={value}")
+        if key in {"xsrf-token", "xsrf_token", "x-xsrf-token"}:
+            xsrf = value
+    return "; ".join(parts), len(parts), xsrf
+
 def bind_m_site_access_token(page: Page, token_holder: dict, secretkey_holder: dict, xsrf_holder: dict, account_index: int):
     if not truthy(os.getenv("JLC_BIND_TOKEN_ENABLED", "true")):
         return None
@@ -744,6 +775,11 @@ class ApiClient:
         self.user_agent = user_agent or get_runtime_user_agent()
         self.client_type = JLC_CLIENT_TYPE
         effective_secretkey = JLC_SECRET_KEY_VALUE or secretkey
+        self.access_token = access_token
+        self.secretkey = effective_secretkey
+        self.cookie_count = 0
+        self.cookie_attached_to_api = False
+        self.m_site_token_bound = False
         self.headers = {
             'user-agent': self.user_agent,
             HEADER_CLIENT_TYPE: self.client_type,
@@ -787,10 +823,49 @@ class ApiClient:
         self.activity_records = make_empty_extra_records()
         self.lottery_activity_code = DEFAULT_LOTTERY_ACTIVITY_CODE
         self.draw_results = []
+        self.refresh_browser_cookies(log_status=True)
 
     def close(self):
         if self.http:
             self.http.close()
+
+    def refresh_browser_cookies(self, log_status=False) -> bool:
+        cookie_header, cookie_count, xsrf = jlc_cookie_diagnostics(self.page)
+        self.cookie_count = cookie_count
+        self.cookie_attached_to_api = bool(cookie_header)
+        if cookie_header:
+            self.headers["cookie"] = cookie_header
+        if xsrf and HEADER_XSRF_TOKEN:
+            self.headers[HEADER_XSRF_TOKEN] = xsrf
+        if log_status:
+            log(
+                f"账号{self.account_index} - m站Cookie状态: "
+                f"count={self.cookie_count} attached={self.cookie_attached_to_api}"
+            )
+        return self.cookie_attached_to_api
+
+    def rebind_m_site_token(self, tag="before-api") -> bool:
+        token_holder = {"value": self.headers.get(HEADER_ACCESS_TOKEN) or self.access_token}
+        secretkey_holder = {"value": self.secretkey}
+        xsrf_holder = {"value": self.headers.get(HEADER_XSRF_TOKEN) or ""}
+        token = bind_m_site_access_token(self.page, token_holder, secretkey_holder, xsrf_holder, self.account_index)
+        if not token:
+            self.refresh_browser_cookies(log_status=True)
+            log(f"账号{self.account_index} - {tag} m站token重绑未成功，继续使用现有token")
+            return False
+        self.access_token = token
+        self.headers[HEADER_ACCESS_TOKEN] = token
+        self.m_site_token_bound = True
+        self.refresh_browser_cookies(log_status=True)
+        log(f"账号{self.account_index} - {tag} 已刷新m站token和Cookie")
+        return True
+
+    def auth_diagnostics(self) -> dict:
+        return {
+            "m_site_token_bound": bool(self.m_site_token_bound),
+            "cookie_count": int(self.cookie_count or 0),
+            "cookie_attached_to_api": bool(self.cookie_attached_to_api),
+        }
 
     def _mark_failure(self, status, raw=None, detail=""):
         reason = detail or build_detail_reason(raw, default=status)
@@ -1225,6 +1300,9 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
         'has_reward': False,
         'token_extracted': False,
         'secretkey_extracted': False,
+        'm_site_token_bound': False,
+        'cookie_count': 0,
+        'cookie_attached_to_api': False,
         'retry_count': retry_count,
         'is_final_retry': is_final_retry,
         'password_error': False,
@@ -1376,6 +1454,8 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
 
             # 提取 token
             access_token = bind_m_site_access_token(page, token_holder, secretkey_holder, xsrf_holder, account_index)
+            if access_token:
+                result['m_site_token_bound'] = True
             if not access_token:
                 access_token = extract_token_from_local_storage(page)
             if not access_token:
@@ -1384,6 +1464,8 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
             if not access_token:
                 page.reload(wait_until="networkidle")
                 access_token = bind_m_site_access_token(page, token_holder, secretkey_holder, xsrf_holder, account_index)
+                if access_token:
+                    result['m_site_token_bound'] = True
                 if not access_token:
                     access_token = extract_token_from_local_storage(page)
                 if not access_token:
@@ -1395,6 +1477,7 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
 
             if access_token:
                 client = ApiClient(access_token, secretkey, account_index, page, user_agent=ua_string)
+                client.m_site_token_bound = bool(result.get('m_site_token_bound'))
                 log(f"账号{account_index} - API clientType={client.client_type}, referer={REFERER}")
                 log(f"账号{account_index} - 使用 token 执行抽奖流程（报名、兑换、抽奖）")
                 success = client.execute_full_process()
@@ -1416,6 +1499,7 @@ def sign_in_account(username, password, account_index, total_accounts, retry_cou
                     'detail_reason': client.detail_reason,
                     'sign_completed_at': client.sign_completed_at,
                     'activity_records': client.activity_records,
+                    **client.auth_diagnostics(),
                 })
                 client.close()
             else:

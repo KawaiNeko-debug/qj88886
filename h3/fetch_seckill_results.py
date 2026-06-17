@@ -44,10 +44,15 @@ def target_date() -> str:
     return datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
 
 
-def pick_run(repo: str, token: str, workflow_file: str, date_text: str):
+def pick_run(repo: str, token: str, workflow_file: str, date_text: str, event: str = "schedule"):
     url = f"https://api.github.com/repos/{repo}/actions/workflows/{workflow_file}/runs"
-    payload = api_get(url, token, params={"status": "completed", "per_page": 30})
+    params = {"status": "completed", "per_page": 50}
+    if event:
+        params["event"] = event
+    payload = api_get(url, token, params=params)
     for run in payload.get("workflow_runs", []):
+        if event and run.get("event") != event:
+            continue
         source_time = run.get("created_at") or run.get("run_started_at") or run.get("updated_at")
         if source_time and iso_to_local_date(source_time) == date_text:
             return run
@@ -84,22 +89,28 @@ def main():
 
     os.makedirs(output_dir, exist_ok=True)
     date_text = target_date()
+    run_event = (os.getenv("SECKILL_SUMMARY_RUN_EVENT") or "schedule").strip()
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "target_date": date_text,
+        "run_event": run_event,
         "batches": [],
     }
     found_any = False
     for item in WORKFLOWS:
         batch = dict(item)
         batch["found"] = False
-        run = pick_run(repo, token, item["workflow_file"], date_text)
+        run = pick_run(repo, token, item["workflow_file"], date_text, run_event)
         if not run:
-            batch["reason"] = "workflow run not found for target date"
+            batch["reason"] = f"workflow run not found for target date/event={run_event or 'any'}"
             manifest["batches"].append(batch)
             continue
         batch["run_id"] = run.get("id")
         batch["run_url"] = run.get("html_url")
+        batch["event"] = run.get("event")
+        batch["created_at"] = run.get("created_at")
+        batch["run_started_at"] = run.get("run_started_at")
+        batch["updated_at"] = run.get("updated_at")
         batch["conclusion"] = run.get("conclusion")
         target_dir = os.path.join(output_dir, f"batch{item['group_number']}")
         artifact = download_artifact(repo, token, run["id"], item["artifact_name"], target_dir)
