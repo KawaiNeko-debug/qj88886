@@ -12,7 +12,7 @@ import requests
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 WORKFLOWS = [
     {"workflow_file": f"seckill-batch{i}.yml", "artifact_name": f"seckill-batch{i}-result", "group_number": i}
-    for i in range(1, 10)
+    for i in range(1, 16)
 ]
 
 

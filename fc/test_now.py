@@ -229,7 +229,7 @@ def write_payload(rows: list[dict[str, Any]], group_number: int, group_name: str
 def main() -> int:
     url = (os.getenv("ALIYUN_FC_SECKILL_URL") or "").strip()
     token = (os.getenv("ALIYUN_FC_INVOKE_TOKEN") or "").strip()
-    group_number = safe_int(os.getenv("FC_TEST_GROUP_NUMBER"), 10)
+    group_number = safe_int(os.getenv("FC_TEST_GROUP_NUMBER"), 16)
     group_name = os.getenv("FC_TEST_GROUP_NAME") or "seckill-fc-test"
     accounts = parse_accounts(os.getenv("ACCOUNTS_TEST") or "")
     limit = safe_int(os.getenv("FC_TEST_ACCOUNT_LIMIT"), 2)

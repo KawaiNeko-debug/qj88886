@@ -206,6 +206,7 @@ def load_config(path: str, batch_number: int) -> dict[str, Any]:
 
 def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
     mappings = {
+        "SECKILL_ENABLED": ("seckill_enabled", str),
         "SECKILL_TARGET_KEYWORD": ("target_keyword", str),
         "SECKILL_BASE_URL": ("base_url", str),
         "SECKILL_CATEGORY_ACCESS_ID": ("category_access_id", str),
@@ -976,8 +977,52 @@ def run_live(args) -> int:
         f"script_started={script_started_at.strftime('%H:%M:%S')} "
         f"login_at={login_target.strftime('%H:%M:%S')} "
         f"seckill_at={seckill_target.strftime('%H:%M:%S')} "
-        f"hard_stop={hard_stop_target.strftime('%H:%M:%S')}"
+            f"hard_stop={hard_stop_target.strftime('%H:%M:%S')}"
     )
+    if not truthy(config.get("seckill_enabled", True)):
+        reason = f"{config.get('batch_key')} seckill_enabled=false，已按配置跳过登录和抢购"
+        result = {
+            "account_index": args.account_index,
+            "username": args.username,
+            "masked_username": mask_account(args.username),
+            "sign_status": "配置关闭抢购",
+            "sign_success": False,
+            "seckill_skipped": True,
+            "has_reward": False,
+            "password_error": False,
+            "risk_controlled": False,
+            "retry_count": 0,
+            "is_final_retry": False,
+            "token_extracted": False,
+            "secretkey_extracted": False,
+            "m_site_token_bound": False,
+            "cookie_count": 0,
+            "cookie_attached_to_api": False,
+            "detail_reason": reason,
+            "sign_time": "",
+            "sign_ip": "",
+            "runner_diagnostics": diagnostics,
+            "login_started_at": "",
+            "login_attempts": [],
+            "activity_records": {
+                "seckill": [
+                    {
+                        "target_keyword": str(config.get("target_keyword") or ""),
+                        "schedule_mode": str(config.get("schedule_mode") or ""),
+                        "attempts_sent": 0,
+                        "success": False,
+                        "last_response_message": reason,
+                        "response_counts": {},
+                    }
+                ],
+                "lottery": [],
+            },
+        }
+        log(reason)
+        payload = build_output_payload(result, SeckillRuntime(config=config), args.username, args.account_index)
+        write_result(os.getenv("RESULT_JSON_PATH", "result.json"), payload)
+        return 0
+
     if truthy(os.getenv("SECKILL_SKIP_LATE_START", "true")) and script_started_at >= hard_stop_target:
         reason = (
             f"账号脚本启动过晚：script_started={script_started_at.strftime('%H:%M:%S')} "

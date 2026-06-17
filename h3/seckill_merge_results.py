@@ -55,6 +55,7 @@ PRESERVED_RESULT_FIELDS = (
     "login_attempts",
     "token_extracted",
     "secretkey_extracted",
+    "seckill_skipped",
     "m_site_token_bound",
     "cookie_count",
     "cookie_attached_to_api",

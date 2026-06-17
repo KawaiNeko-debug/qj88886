@@ -1,0 +1,40 @@
+name: seckill-batch10
+
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  run:
+    uses: ./.github/workflows/seckill-reusable.yml
+    with:
+      batch_number: 10
+    secrets:
+      ACCOUNTS_BATCH: ${{ secrets.ACCOUNTS_BATCH10 }}
+      PASSPORT_URL: ${{ secrets.PASSPORT_URL }}
+      SLIDER_ID: ${{ secrets.SLIDER_ID }}
+      WRAPPER_ID: ${{ secrets.WRAPPER_ID }}
+      BASE_URL: ${{ secrets.BASE_URL }}
+      SECKILL_BASE_URL: ${{ secrets.SECKILL_BASE_URL }}
+      SECKILL_CATEGORY_ACCESS_ID: ${{ secrets.SECKILL_CATEGORY_ACCESS_ID }}
+      SECKILL_REFERER: ${{ secrets.SECKILL_REFERER }}
+      REFERER: ${{ secrets.REFERER }}
+      JLC_REFERER: ${{ secrets.JLC_REFERER }}
+      HEADER_CLIENT_TYPE: ${{ secrets.HEADER_CLIENT_TYPE }}
+      HEADER_ACCESS_TOKEN: ${{ secrets.HEADER_ACCESS_TOKEN }}
+      HEADER_ACCESS_TOKEN_FALLBACKS: ${{ secrets.HEADER_ACCESS_TOKEN_FALLBACKS }}
+      HEADER_SECRET_KEY: ${{ secrets.HEADER_SECRET_KEY }}
+      TOKEN_KEY: ${{ secrets.TOKEN_KEY }}
+      TOKEN_ALTERNATIVE_KEYS: ${{ secrets.TOKEN_ALTERNATIVE_KEYS }}
+      JLC_CLIENT_TYPE: ${{ secrets.JLC_CLIENT_TYPE }}
+      JLC_SECRET_KEY_VALUE: ${{ secrets.JLC_SECRET_KEY_VALUE }}
+      JLC_USE_HTTP2: ${{ secrets.JLC_USE_HTTP2 }}
+      JLC_ACCEPT_LANGUAGE: ${{ secrets.JLC_ACCEPT_LANGUAGE }}
+      BROWSER_VIEWPORT_WIDTH: ${{ secrets.BROWSER_VIEWPORT_WIDTH }}
+      BROWSER_VIEWPORT_HEIGHT: ${{ secrets.BROWSER_VIEWPORT_HEIGHT }}
+      BROWSER_DEVICE_SCALE_FACTOR: ${{ secrets.BROWSER_DEVICE_SCALE_FACTOR }}

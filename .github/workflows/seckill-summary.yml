@@ -48,6 +48,12 @@ jobs:
           ACCOUNTS_BATCH7: ${{ secrets.ACCOUNTS_BATCH7 }}
           ACCOUNTS_BATCH8: ${{ secrets.ACCOUNTS_BATCH8 }}
           ACCOUNTS_BATCH9: ${{ secrets.ACCOUNTS_BATCH9 }}
+          ACCOUNTS_BATCH10: ${{ secrets.ACCOUNTS_BATCH10 }}
+          ACCOUNTS_BATCH11: ${{ secrets.ACCOUNTS_BATCH11 }}
+          ACCOUNTS_BATCH12: ${{ secrets.ACCOUNTS_BATCH12 }}
+          ACCOUNTS_BATCH13: ${{ secrets.ACCOUNTS_BATCH13 }}
+          ACCOUNTS_BATCH14: ${{ secrets.ACCOUNTS_BATCH14 }}
+          ACCOUNTS_BATCH15: ${{ secrets.ACCOUNTS_BATCH15 }}
           NOTIFY_CHANNELS: telegram
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

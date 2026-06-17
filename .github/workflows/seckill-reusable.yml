@@ -159,8 +159,30 @@ jobs:
           print("execution order: " + ", ".join(map(str, indexes)))
           PY
 
+  build_sender:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build Go seckill sender
+        run: go build -o h3/seckill_sender h3/seckill_sender.go
+
+      - name: Upload Go seckill sender
+        uses: actions/upload-artifact@v4
+        with:
+          name: seckill-sender-batch${{ inputs.batch_number }}
+          path: h3/seckill_sender
+          if-no-files-found: error
+          retention-days: 2
+
   run:
-    needs: [prepare]
+    needs: [prepare, build_sender]
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     strategy:
@@ -246,13 +268,11 @@ jobs:
           print(f"selected account {index}; execution order {os.environ.get('EXECUTION_ORDER')}")
           PY
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Download Go seckill sender
+        uses: actions/download-artifact@v4
         with:
-          go-version: "1.22"
-
-      - name: Build Go seckill sender
-        run: go build -o h3/seckill_sender h3/seckill_sender.go
+          name: seckill-sender-batch${{ inputs.batch_number }}
+          path: h3
 
       - name: Prepare Go seckill sender
         run: chmod +x h3/seckill_sender
@@ -289,6 +309,14 @@ jobs:
           group_number = int(os.getenv("GROUP_NUMBER", "0") or 0)
           account_index = int(os.getenv("ACCOUNT_INDEX", "0") or 0)
           reason = f"seckill script did not create result.json; step={os.getenv('SECKILL_STEP_OUTCOME', 'unknown')}"
+          diagnostics = {
+              "ga_job_started_at": os.getenv("GA_JOB_STARTED_AT", ""),
+              "ga_run_seckill_started_at": os.getenv("GA_RUN_SECKILL_STARTED_AT", ""),
+              "script_started_at": "",
+              "login_target": os.getenv("SECKILL_LOGIN_AT", ""),
+              "seckill_target": os.getenv("SECKILL_AT", ""),
+              "hard_stop_target": os.getenv("SECKILL_HARD_STOP_TIME", ""),
+          }
           payload = {
               "generated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(),
               "batch_name": f"seckill-batch{group_number}",
@@ -309,9 +337,17 @@ jobs:
                   "risk_controlled": False,
                   "retry_count": 0,
                   "is_final_retry": False,
+                  "token_extracted": False,
+                  "secretkey_extracted": False,
+                  "m_site_token_bound": False,
+                  "cookie_count": 0,
+                  "cookie_attached_to_api": False,
                   "detail_reason": reason,
                   "sign_time": "",
                   "sign_ip": "",
+                  "runner_diagnostics": diagnostics,
+                  "login_started_at": "",
+                  "login_attempts": [],
                   "activity_records": {"seckill": []},
               }],
           }

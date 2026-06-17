@@ -70,7 +70,7 @@ def parse_account_line(line: str):
 
 def expected_accounts() -> tuple[dict[tuple[int, int], str], int]:
     lookup = {}
-    for group_number in range(1, 10):
+    for group_number in range(1, 16):
         raw = os.getenv(f"ACCOUNTS_BATCH{group_number}", "") or ""
         for account_index, line in enumerate(raw.splitlines(), start=1):
             username = parse_account_line(line.strip())
@@ -134,6 +134,7 @@ def normalize_record(row: dict, payload: dict) -> dict:
         "seckill_target": diagnostics.get("seckill_target") or "",
         "hard_stop_target": diagnostics.get("hard_stop_target") or "",
         "success": success,
+        "skipped": truthy(row.get("seckill_skipped")),
         "status": status,
         "reason": reason,
         "password_error": truthy(row.get("password_error")),
@@ -199,6 +200,7 @@ def missing_record(group_number: int, account_index: int, username: str) -> dict
         "seckill_target": "",
         "hard_stop_target": "",
         "success": False,
+        "skipped": False,
         "status": "未回传结果",
         "reason": "10:05 汇总时未下载到该账号结果",
         "password_error": False,
@@ -261,7 +263,7 @@ def sort_records(records: list[dict]) -> list[dict]:
     return sorted(
         records,
         key=lambda item: (
-            0 if not item.get("success") else 1,
+            2 if item.get("success") else (1 if item.get("skipped") else 0),
             safe_int(item.get("group_number"), 999),
             safe_int(item.get("account_index"), 999),
         ),
@@ -271,14 +273,15 @@ def sort_records(records: list[dict]) -> list[dict]:
 def build_summary(records: list[dict], expected_total: int) -> dict:
     total = expected_total or len(records)
     success = sum(1 for item in records if item.get("success"))
-    failed = total - success
+    skipped = sum(1 for item in records if item.get("skipped"))
+    failed = total - success - skipped
     by_goods = {}
     for item in records:
         if not item.get("success"):
             continue
         title = str(item.get("title") or "未知商品")
         by_goods[title] = by_goods.get(title, 0) + 1
-    return {"total": total, "success": success, "failed": failed, "by_goods": by_goods}
+    return {"total": total, "success": success, "skipped": skipped, "failed": failed, "by_goods": by_goods}
 
 
 def build_message(records: list[dict], manifest: dict, expected_total: int) -> tuple[str, dict]:
@@ -287,13 +290,14 @@ def build_message(records: list[dict], manifest: dict, expected_total: int) -> t
         f"{target_date_text(manifest)} 秒杀汇总",
         f"总账号: {summary['total']}",
         f"成功: {summary['success']}",
+        f"配置关闭: {summary['skipped']}",
         f"失败/缺失: {summary['failed']}",
     ]
     if summary["by_goods"]:
         lines.append("成功商品:")
         for title, count in sorted(summary["by_goods"].items(), key=lambda item: (-item[1], item[0])):
             lines.append(f"- {title}: {count}")
-    problem = [item for item in sort_records(records) if not item.get("success")]
+    problem = [item for item in sort_records(records) if not item.get("success") and not item.get("skipped")]
     if problem:
         lines.append("异常账号:")
         for item in problem[:80]:
@@ -344,6 +348,7 @@ def write_xlsx(path: str, records: list[dict]):
     sheet.append(headers)
     header_fill = PatternFill("solid", fgColor="D9E2F3")
     ok_font = Font(color="008000")
+    skip_fill = PatternFill("solid", fgColor="FFF2CC")
     bad_fill = PatternFill("solid", fgColor="F8696B")
     bad_font = Font(color="FFFFFF", bold=True)
     border = Border(
@@ -404,6 +409,8 @@ def write_xlsx(path: str, records: list[dict]):
         status_cell = sheet.cell(row_index, 4)
         if item.get("success"):
             status_cell.font = ok_font
+        elif item.get("skipped"):
+            status_cell.fill = skip_fill
         else:
             status_cell.fill = bad_fill
             status_cell.font = bad_font

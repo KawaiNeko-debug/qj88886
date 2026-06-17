@@ -24,7 +24,7 @@ on:
         default: "6"
         type: string
       target_keyword:
-        description: "Optional test target keyword; empty uses h3/seckill_config.yml batch10"
+        description: "Optional test target keyword; empty uses h3/seckill_config.yml batch16"
         required: false
         default: ""
         type: string
@@ -61,7 +61,7 @@ jobs:
           ALIYUN_FC_INVOKE_TOKEN: ${{ secrets.ALIYUN_FC_INVOKE_TOKEN }}
           ACCOUNTS_TEST: ${{ secrets.ACCOUNTS_TEST }}
           FC_TEST_ACCOUNT_LIMIT: ${{ inputs.account_limit }}
-          FC_TEST_GROUP_NUMBER: "10"
+          FC_TEST_GROUP_NUMBER: "16"
           FC_TEST_GROUP_NAME: seckill-fc-test
           RELATIVE_TIMING: "true"
           LOGIN_AFTER_MINUTES: ${{ inputs.login_after_minutes }}

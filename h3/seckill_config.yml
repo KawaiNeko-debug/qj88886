@@ -1,5 +1,6 @@
 defaults:
   source: 4
+  seckill_enabled: true
   login_at: "09:50:00"
   seckill_at: "10:00:00"
   hard_stop_time: "10:01:00"
@@ -82,6 +83,48 @@ batches:
     calibration_enabled: true
   batch10:
     group_number: 10
+    group_name: "seckill-batch10"
+    seckill_enabled: true
+    target_keyword: ""
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch11:
+    group_number: 11
+    group_name: "seckill-batch11"
+    seckill_enabled: true
+    target_keyword: ""
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch12:
+    group_number: 12
+    group_name: "seckill-batch12"
+    seckill_enabled: true
+    target_keyword: ""
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch13:
+    group_number: 13
+    group_name: "seckill-batch13"
+    seckill_enabled: true
+    target_keyword: ""
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch14:
+    group_number: 14
+    group_name: "seckill-batch14"
+    seckill_enabled: true
+    target_keyword: ""
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch15:
+    group_number: 15
+    group_name: "seckill-batch15"
+    seckill_enabled: true
+    target_keyword: ""
+    schedule_mode: "dynamic"
+    calibration_enabled: true
+  batch16:
+    group_number: 16
     group_name: "seckill-test"
     target_keyword: "棉腰靠"
     schedule_mode: "fixed"

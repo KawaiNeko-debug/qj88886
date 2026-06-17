@@ -19,7 +19,7 @@ on:
         default: "6"
         type: string
       target_keyword:
-        description: "测试商品关键词；留空则使用 h3/seckill_config.yml 的 batch10"
+        description: "测试商品关键词；留空则使用 h3/seckill_config.yml 的 batch16"
         required: false
         default: ""
         type: string
@@ -32,7 +32,7 @@ jobs:
   run:
     uses: ./.github/workflows/seckill-reusable.yml
     with:
-      batch_number: 10
+      batch_number: 16
       relative_timing: true
       login_after_minutes: ${{ inputs.login_after_minutes }}
       seckill_after_minutes: ${{ inputs.seckill_after_minutes }}
@@ -73,7 +73,7 @@ jobs:
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          name: seckill-batch10-result
+          name: seckill-batch16-result
           path: test-results
 
       - name: Send Telegram test summary
@@ -275,12 +275,12 @@ jobs:
           ]
 
           if not result_files:
-              lines.append("结果: 未找到 seckill-batch10-result artifact，可能测试流程未跑到合并阶段。")
+              lines.append("结果: 未找到 seckill-batch16-result artifact，可能测试流程未跑到合并阶段。")
               rows.append({
                   "account_index": "",
                   "group_position": "测试汇总",
                   "sign_status": "未找到结果",
-                  "detail_reason": "未找到 seckill-batch10-result artifact，可能测试流程未跑到合并阶段。",
+                  "detail_reason": "未找到 seckill-batch16-result artifact，可能测试流程未跑到合并阶段。",
                   "activity_records": {"seckill": [{}]},
               })
           else:
