@@ -28,6 +28,9 @@ type SenderConfig struct {
 	PrewarmConcurrency   int               `json:"prewarm_concurrency"`
 	BurstConcurrency     int               `json:"burst_concurrency"`
 	BurstIntervalMs      int               `json:"burst_interval_ms"`
+	MaxInflight          int               `json:"max_inflight"`
+	RequestTimeoutMs     int               `json:"request_timeout_ms"`
+	DrainGraceMs         int               `json:"drain_grace_ms"`
 	ResponseLogLimit     int               `json:"response_log_limit"`
 	ResponseLogEvery     int               `json:"response_log_every"`
 	ResponseLogBodyChars int               `json:"response_log_body_chars"`
@@ -45,6 +48,7 @@ type SenderResult struct {
 	SuccessResponse     any            `json:"success_response"`
 	LastResponseMessage string         `json:"last_response_message"`
 	ResponseCounts      map[string]int `json:"response_counts"`
+	SkippedByCapacity   int64          `json:"skipped_by_capacity"`
 }
 
 type senderState struct {
@@ -53,6 +57,7 @@ type senderState struct {
 	payload             []byte
 	stop                atomic.Bool
 	attempts            atomic.Int64
+	skippedByCapacity   atomic.Int64
 	logsEmitted         int
 	firstResponse       any
 	first401Response    any
@@ -164,6 +169,19 @@ func isSuccess(data any) bool {
 	}
 }
 
+func isLocalTransportError(data any, httpStatus int) bool {
+	if httpStatus != 0 {
+		return false
+	}
+	obj, ok := data.(map[string]any)
+	if !ok {
+		return false
+	}
+	code := fmt.Sprint(obj["code"])
+	success := fmt.Sprint(obj["success"])
+	return code == "0" && success == "false"
+}
+
 func isUnauthorizedResponse(data any, httpStatus int) bool {
 	if httpStatus == http.StatusUnauthorized {
 		return true
@@ -207,7 +225,11 @@ func (s *senderState) sendOnce(ctx context.Context) {
 	attempt := s.attempts.Add(1)
 	start := nowMs()
 
-	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	timeoutMs := s.cfg.RequestTimeoutMs
+	if timeoutMs <= 0 {
+		timeoutMs = 12000
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, s.cfg.BuyURL, bytes.NewReader(s.payload))
 	if err != nil {
@@ -257,7 +279,7 @@ func (s *senderState) record(attempt, start, end int64, httpStatus int, data any
 	} else if httpStatus > 0 && s.firstNon401Response == nil {
 		s.firstNon401Response = data
 	}
-	if data != nil {
+	if data != nil && (!isLocalTransportError(data, httpStatus) || s.lastResponseMessage == "") {
 		s.lastResponseMessage = safeMessage(data)
 	}
 	if s.cfg.ResponseLogLimit < 0 {
@@ -294,12 +316,19 @@ func (s *senderState) record(attempt, start, end int64, httpStatus int, data any
 	}
 }
 
-func (s *senderState) fire(ctx context.Context, count int, sem chan struct{}, wg *sync.WaitGroup) {
+func (s *senderState) fire(ctx context.Context, count int, sem chan struct{}, wg *sync.WaitGroup) int {
+	fired := 0
 	for i := 0; i < count; i++ {
 		if s.stop.Load() || ctx.Err() != nil {
-			return
+			return fired
 		}
-		sem <- struct{}{}
+		select {
+		case sem <- struct{}{}:
+			fired++
+		default:
+			s.skippedByCapacity.Add(int64(count - i))
+			return fired
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -307,6 +336,7 @@ func (s *senderState) fire(ctx context.Context, count int, sem chan struct{}, wg
 			s.sendOnce(ctx)
 		}()
 	}
+	return fired
 }
 
 func (s *senderState) run() SenderResult {
@@ -318,6 +348,12 @@ func (s *senderState) run() SenderResult {
 	}
 	if s.cfg.BurstIntervalMs <= 0 {
 		s.cfg.BurstIntervalMs = 10
+	}
+	if s.cfg.RequestTimeoutMs <= 0 {
+		s.cfg.RequestTimeoutMs = 12000
+	}
+	if s.cfg.DrainGraceMs <= 0 {
+		s.cfg.DrainGraceMs = 1000
 	}
 	if s.cfg.ResponseLogBodyChars <= 0 {
 		s.cfg.ResponseLogBodyChars = 500
@@ -332,7 +368,10 @@ func (s *senderState) run() SenderResult {
 	}
 	defer cancel()
 
-	maxWorkers := s.cfg.BurstConcurrency
+	maxWorkers := s.cfg.MaxInflight
+	if maxWorkers <= 0 {
+		maxWorkers = s.cfg.BurstConcurrency * 4
+	}
 	if s.cfg.PrewarmConcurrency > maxWorkers {
 		maxWorkers = s.cfg.PrewarmConcurrency
 	}
@@ -357,21 +396,47 @@ func (s *senderState) run() SenderResult {
 			break
 		}
 		rounds++
-		s.fire(ctx, s.cfg.BurstConcurrency, sem, &wg)
+		fired := s.fire(ctx, s.cfg.BurstConcurrency, sem, &wg)
+		if fired == 0 && rounds%25 == 0 {
+			logf(
+				"account %d: go send capacity full rounds=%d attempts=%d skipped=%d",
+				s.cfg.AccountIndex,
+				rounds,
+				s.attempts.Load(),
+				s.skippedByCapacity.Load(),
+			)
+		}
 		nextRound += int64(s.cfg.BurstIntervalMs)
 	}
 
 	logf("account %d: go send loop ended rounds=%d attempts=%d success=%v", s.cfg.AccountIndex, rounds, s.attempts.Load(), s.successResponse != nil)
 
-	drainUntil := nowMs() + 3000
+	drainUntil := nowMs() + int64(s.cfg.RequestTimeoutMs+s.cfg.DrainGraceMs)
 	if s.cfg.HardStopMs > 0 && s.cfg.HardStopMs < drainUntil {
 		drainUntil = s.cfg.HardStopMs
 	}
-	for nowMs() < drainUntil && !s.stop.Load() {
-		time.Sleep(50 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	if s.stop.Load() {
+		cancel()
+		<-done
+	} else {
+		waitMs := drainUntil - nowMs()
+		if waitMs > 0 {
+			select {
+			case <-done:
+			case <-time.After(time.Duration(waitMs) * time.Millisecond):
+				cancel()
+				<-done
+			}
+		} else {
+			cancel()
+			<-done
+		}
 	}
-	cancel()
-	wg.Wait()
 	s.client.CloseIdleConnections()
 
 	s.mu.Lock()
@@ -387,6 +452,7 @@ func (s *senderState) run() SenderResult {
 		SuccessResponse:     s.successResponse,
 		LastResponseMessage: s.lastResponseMessage,
 		ResponseCounts:      s.responseCounts,
+		SkippedByCapacity:   s.skippedByCapacity.Load(),
 	}
 }
 
@@ -463,11 +529,24 @@ func main() {
 		os.Exit(2)
 	}
 
+	connLimit := cfg.MaxInflight
+	if connLimit <= 0 {
+		connLimit = cfg.BurstConcurrency * 4
+	}
+	if connLimit < cfg.BurstConcurrency {
+		connLimit = cfg.BurstConcurrency
+	}
+	if connLimit < cfg.PrewarmConcurrency {
+		connLimit = cfg.PrewarmConcurrency
+	}
+	if connLimit < 1 {
+		connLimit = 120
+	}
 	transport := &http.Transport{
 		ForceAttemptHTTP2:     !cfg.DisableHTTP2,
-		MaxIdleConns:          500,
-		MaxIdleConnsPerHost:   240,
-		MaxConnsPerHost:       240,
+		MaxIdleConns:          connLimit + 20,
+		MaxIdleConnsPerHost:   connLimit,
+		MaxConnsPerHost:       connLimit,
 		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,

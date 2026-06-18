@@ -148,6 +148,7 @@ def normalize_record(row: dict, payload: dict) -> dict:
         "calibration_source": rec.get("calibration_source") or "",
         "time_is_successes": rec.get("time_is_successes") or "",
         "attempts_sent": safe_int(rec.get("attempts_sent"), 0),
+        "skipped_by_capacity": safe_int(rec.get("skipped_by_capacity"), 0),
         "median_rtt_ms": rec.get("median_rtt_ms"),
         "median_server_delta_ms": rec.get("median_server_delta_ms"),
         "success_sent_at": rec.get("success_sent_at") or "",
@@ -214,6 +215,7 @@ def missing_record(group_number: int, account_index: int, username: str) -> dict
         "calibration_source": "",
         "time_is_successes": "",
         "attempts_sent": 0,
+        "skipped_by_capacity": 0,
         "median_rtt_ms": "",
         "median_server_delta_ms": "",
         "success_sent_at": "",
@@ -323,6 +325,7 @@ def write_xlsx(path: str, records: list[dict]):
         "商品ID",
         "调度模式",
         "发包数",
+        "容量跳过数",
         "RTT中位数(ms)",
         "服务器时差中位数(ms)",
         "成功发送时间",
@@ -376,6 +379,7 @@ def write_xlsx(path: str, records: list[dict]):
             item.get("goods_detail_access_id", ""),
             item.get("schedule_mode", ""),
             item.get("attempts_sent", 0),
+            item.get("skipped_by_capacity", 0),
             item.get("median_rtt_ms", ""),
             item.get("median_server_delta_ms", ""),
             item.get("success_sent_at", ""),
@@ -400,7 +404,7 @@ def write_xlsx(path: str, records: list[dict]):
         ]
         sheet.append(row)
         row_index = sheet.max_row
-        ratio_cell = sheet.cell(row_index, 31)
+        ratio_cell = sheet.cell(row_index, 32)
         if isinstance(item.get("response_401_ratio"), (int, float)):
             ratio_cell.number_format = "0.00%"
         for cell in sheet[row_index]:
@@ -428,27 +432,28 @@ def write_xlsx(path: str, records: list[dict]):
         "I": 34,
         "J": 14,
         "K": 12,
-        "L": 16,
-        "M": 22,
-        "N": 28,
+        "L": 12,
+        "M": 16,
+        "N": 22,
         "O": 28,
-        "P": 26,
+        "P": 28,
         "Q": 26,
         "R": 26,
         "S": 26,
         "T": 26,
         "U": 26,
         "V": 26,
-        "W": 22,
-        "X": 16,
-        "Y": 12,
-        "Z": 16,
-        "AA": 12,
+        "W": 26,
+        "X": 22,
+        "Y": 16,
+        "Z": 12,
+        "AA": 16,
         "AB": 12,
-        "AC": 16,
-        "AD": 12,
+        "AC": 12,
+        "AD": 16,
         "AE": 12,
-        "AF": 42,
+        "AF": 12,
+        "AG": 42,
     }
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width

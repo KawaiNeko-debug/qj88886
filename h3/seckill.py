@@ -217,6 +217,9 @@ def apply_env_overrides(config: dict[str, Any]) -> dict[str, Any]:
         "SECKILL_PREWARM_CONCURRENCY": ("prewarm_concurrency", int),
         "SECKILL_BURST_CONCURRENCY": ("burst_concurrency", int),
         "SECKILL_BURST_INTERVAL_MS": ("burst_interval_ms", int),
+        "SECKILL_MAX_INFLIGHT": ("max_inflight", int),
+        "SECKILL_REQUEST_TIMEOUT_MS": ("request_timeout_ms", int),
+        "SECKILL_DRAIN_GRACE_MS": ("drain_grace_ms", int),
         "SECKILL_PREWARM_SERVER_ARRIVAL_LEAD_MS": ("prewarm_server_arrival_lead_ms", int),
         "SECKILL_ACTIVE_WINDOW_MS": ("active_window_ms", int),
         "SECKILL_FIXED_LEAD_MS": ("fixed_lead_ms", int),
@@ -296,6 +299,7 @@ class SeckillRuntime:
     success_sent_at: str = ""
     success_received_at: str = ""
     last_response_message: str = ""
+    skipped_by_capacity: int = 0
     response_logs_emitted: int = 0
     response_counts: dict[str, int] = field(default_factory=dict)
     time_is_attempts: int = 0
@@ -386,6 +390,11 @@ def is_401_response(data: Any, http_status: int) -> bool:
         return True
     message = safe_message(data)
     return "未登录" in message or "会话失效" in message
+
+def is_local_transport_error(data: Any, http_status: int) -> bool:
+    if http_status != 0 or not isinstance(data, dict):
+        return False
+    return str(data.get("code") or "").strip() == "0" and data.get("success") is False
 
 def auth_warning_from_counts(counts: dict[str, int]) -> str:
     if not counts:
@@ -666,7 +675,7 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                         runtime.first_401_response = data if isinstance(data, dict) else {"raw": text[:500]}
                 elif http_status > 0 and runtime.first_non_401_response is None:
                     runtime.first_non_401_response = data if isinstance(data, dict) else {"raw": text[:500]}
-                if isinstance(data, dict):
+                if isinstance(data, dict) and (not is_local_transport_error(data, http_status) or not runtime.last_response_message):
                     runtime.last_response_message = safe_message(data)
                 log_limit = max(0, safe_int(runtime.config.get("response_log_limit"), 50))
                 log_every = max(0, safe_int(runtime.config.get("response_log_every"), 200))
@@ -726,6 +735,9 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 "prewarm_concurrency": safe_int(runtime.config.get("prewarm_concurrency"), 30),
                 "burst_concurrency": safe_int(runtime.config.get("burst_concurrency"), 120),
                 "burst_interval_ms": safe_int(runtime.config.get("burst_interval_ms"), 10),
+                "max_inflight": safe_int(runtime.config.get("max_inflight"), 480),
+                "request_timeout_ms": safe_int(runtime.config.get("request_timeout_ms"), 12000),
+                "drain_grace_ms": safe_int(runtime.config.get("drain_grace_ms"), 1000),
                 "response_log_limit": safe_int(runtime.config.get("response_log_limit"), 50),
                 "response_log_every": safe_int(runtime.config.get("response_log_every"), 200),
                 "response_log_body_chars": safe_int(runtime.config.get("response_log_body_chars"), 500),
@@ -777,6 +789,7 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
             )
             runtime.response_counts = normalize_response_counts(result_payload.get("response_counts"))
             runtime.last_response_message = str(result_payload.get("last_response_message") or "")
+            runtime.skipped_by_capacity = safe_int(result_payload.get("skipped_by_capacity"), 0)
             if truthy(result_payload.get("success")):
                 runtime.success_response = result_payload.get("success_response") if result_payload.get("success_response") is not None else {}
                 runtime.success_sent_at = str(result_payload.get("success_sent_at") or "")
@@ -786,7 +799,7 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 runtime.success_response = None
             log(
                 f"account {self.account_index}: Go sender finished attempts={runtime.attempts_sent} "
-                f"success={bool(runtime.success_response)}"
+                f"success={bool(runtime.success_response)} skipped_by_capacity={runtime.skipped_by_capacity}"
             )
             return True
 
@@ -875,6 +888,7 @@ def install_seckill_client(legacy, runtime: SeckillRuntime):
                 "target_keyword": str(runtime.config.get("target_keyword") or "").strip(),
                 "schedule_mode": str(runtime.config.get("schedule_mode") or "").strip(),
                 "attempts_sent": runtime.attempts_sent,
+                "skipped_by_capacity": runtime.skipped_by_capacity,
                 "success": success,
                 "success_sent_at": runtime.success_sent_at,
                 "success_received_at": runtime.success_received_at,

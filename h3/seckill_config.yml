@@ -7,6 +7,9 @@ defaults:
   prewarm_concurrency: 30
   burst_concurrency: 120
   burst_interval_ms: 10
+  max_inflight: 480
+  request_timeout_ms: 12000
+  drain_grace_ms: 1000
   prewarm_server_arrival_lead_ms: 10
   active_window_ms: 3000
   fixed_lead_ms: 500
