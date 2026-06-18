@@ -70,7 +70,7 @@ def parse_account_line(line: str):
 
 def expected_accounts() -> tuple[dict[tuple[int, int], str], int]:
     lookup = {}
-    for group_number in range(1, 16):
+    for group_number in range(1, 2):
         raw = os.getenv(f"ACCOUNTS_BATCH{group_number}", "") or ""
         for account_index, line in enumerate(raw.splitlines(), start=1):
             username = parse_account_line(line.strip())
