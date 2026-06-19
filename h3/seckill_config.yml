@@ -33,7 +33,7 @@ batches:
   batch1:
     group_number: 1
     group_name: "seckill-batch1"
-    target_keyword: "万用表"
+    target_keyword: "耳机"
     schedule_mode: "fixed"
     fixed_lead_ms: 500
   batch16:
